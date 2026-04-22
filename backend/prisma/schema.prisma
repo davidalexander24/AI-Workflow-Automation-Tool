@@ -5,11 +5,35 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model Workflow {
+  id             String        @id @default(uuid()) @db.Uuid
+  name           String
+  description    String
+  promptTemplate String
+  createdAt      DateTime      @default(now())
+  runs           WorkflowRun[]
+}
+
+model WorkflowRun {
+  id           String            @id @default(uuid()) @db.Uuid
+  workflowId   String            @db.Uuid
+  workflow     Workflow          @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  inputData    Json
+  outputResult String
+  status       WorkflowRunStatus @default(pending)
+  createdAt    DateTime          @default(now())
+}
+
+enum WorkflowRunStatus {
+  pending
+  success
+  failed
 }
