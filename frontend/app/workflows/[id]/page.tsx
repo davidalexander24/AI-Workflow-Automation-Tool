@@ -1,9 +1,24 @@
 'use client';
 
-import { ArrowLeft, Clock3, Loader2, Play, Sparkles } from 'lucide-react';
+import {
+  ArrowLeft,
+  Clock3,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Play,
+  Sparkles,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import {
+  FormEvent,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
   ExecuteWorkflowResponse,
@@ -40,6 +55,22 @@ function truncate(value: string, length: number): string {
   }
 
   return `${value.slice(0, length)}...`;
+}
+
+function formatRunInput(inputData: unknown): string {
+  if (inputData === null || inputData === undefined) {
+    return '';
+  }
+
+  if (typeof inputData === 'string') {
+    return inputData;
+  }
+
+  try {
+    return JSON.stringify(inputData, null, 2);
+  } catch {
+    return String(inputData);
+  }
 }
 
 function extractErrorMessage(error: unknown, fallback: string): string {
@@ -116,6 +147,40 @@ export default function ExecuteWorkflowPage() {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [isLoadingRuns, setIsLoadingRuns] = useState(true);
   const [runsError, setRunsError] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [isInputExpanded, setIsInputExpanded] = useState(false);
+  const [isResultExpanded, setIsResultExpanded] = useState(false);
+  const [canExpandInput, setCanExpandInput] = useState(false);
+  const [canExpandResult, setCanExpandResult] = useState(false);
+  const inputRef = useRef<HTMLDivElement | null>(null);
+  const resultRef = useRef<HTMLDivElement | null>(null);
+  const scrollAnchorRef = useRef<{ element: HTMLElement | null; top: number | null }>({
+    element: null,
+    top: null,
+  });
+  const activeRun = useMemo(
+    () => runs.find((run) => run.id === activeRunId) ?? null,
+    [runs, activeRunId],
+  );
+  const activeRunInput = useMemo(
+    () => (activeRun ? formatRunInput(activeRun.inputData) : ''),
+    [activeRun],
+  );
+
+  const toggleExpanded = (
+    setter: (value: boolean | ((current: boolean) => boolean)) => void,
+    anchorRef: { current: HTMLElement | null },
+  ): void => {
+    const anchor = anchorRef.current;
+    if (anchor) {
+      scrollAnchorRef.current = {
+        element: anchor,
+        top: anchor.getBoundingClientRect().top,
+      };
+    }
+
+    setter((current) => !current);
+  };
 
   async function loadRuns(showLoader = true): Promise<void> {
     if (!workflowId) {
@@ -162,6 +227,63 @@ export default function ExecuteWorkflowPage() {
     void loadWorkflow();
     void loadRuns();
   }, [workflowId]);
+
+  useEffect(() => {
+    if (activeRunId && !runs.some((run) => run.id === activeRunId)) {
+      setActiveRunId(null);
+    }
+  }, [activeRunId, runs]);
+
+  useEffect(() => {
+    setIsInputExpanded(false);
+    setIsResultExpanded(false);
+  }, [activeRunId]);
+
+  useLayoutEffect(() => {
+    const anchor = scrollAnchorRef.current.element;
+    const top = scrollAnchorRef.current.top;
+
+    if (!anchor || top === null) {
+      return;
+    }
+
+    const nextTop = anchor.getBoundingClientRect().top;
+    const delta = nextTop - top;
+
+    if (delta !== 0) {
+      window.scrollBy({ top: delta, left: 0 });
+    }
+
+    scrollAnchorRef.current = { element: null, top: null };
+  }, [isInputExpanded, isResultExpanded]);
+
+  useEffect(() => {
+    if (!activeRun) {
+      setCanExpandInput(false);
+      setCanExpandResult(false);
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      if (inputRef.current) {
+        setCanExpandInput(
+          inputRef.current.scrollHeight > inputRef.current.clientHeight + 4,
+        );
+      } else {
+        setCanExpandInput(false);
+      }
+
+      if (resultRef.current) {
+        setCanExpandResult(
+          resultRef.current.scrollHeight > resultRef.current.clientHeight + 4,
+        );
+      } else {
+        setCanExpandResult(false);
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [activeRunId, activeRunInput, activeRun?.outputResult]);
 
   async function handleRunWorkflow(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -342,38 +464,165 @@ export default function ExecuteWorkflowPage() {
             No runs yet for this workflow.
           </p>
         ) : (
-          <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-4 py-3 font-semibold">Created At</th>
-                  <th className="px-4 py-3 font-semibold">Status</th>
-                  <th className="px-4 py-3 font-semibold">Output Preview</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 bg-white text-slate-700">
-                {runs.map((run) => (
-                  <tr key={run.id}>
-                    <td className="px-4 py-3 text-xs text-slate-500">
-                      {new Date(run.createdAt).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold capitalize ${statusClasses(
-                          run.status,
-                        )}`}
-                      >
-                        {run.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-slate-600">
-                      {truncate(run.outputResult || 'No output captured.', 140)}
-                    </td>
+          <>
+            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Created At</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
+                    <th className="px-4 py-3 font-semibold">Output Preview</th>
+                    <th className="px-4 py-3 text-right font-semibold">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white text-slate-700">
+                  {runs.map((run) => (
+                    <tr key={run.id}>
+                      <td className="px-4 py-3 text-xs text-slate-500">
+                        {new Date(run.createdAt).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold capitalize ${statusClasses(
+                            run.status,
+                          )}`}
+                        >
+                          {run.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-600">
+                        {truncate(run.outputResult || 'No output captured.', 140)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveRunId((current) =>
+                              current === run.id ? null : run.id,
+                            );
+                          }}
+                          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+                        >
+                          {activeRunId === run.id ? 'Hide' : 'Open'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {activeRun ? (
+              <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                      Run Details
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {new Date(activeRun.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold capitalize ${statusClasses(
+                        activeRun.status,
+                      )}`}
+                    >
+                      {activeRun.status}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveRunId(null);
+                      }}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Input Data
+                      </p>
+                      {canExpandInput ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            toggleExpanded(setIsInputExpanded, inputRef);
+                          }}
+                          className="text-slate-400 transition hover:text-slate-600"
+                          aria-label={
+                            isInputExpanded ? 'Collapse input data' : 'Expand input data'
+                          }
+                        >
+                          {isInputExpanded ? (
+                            <Minimize2 className="h-4 w-4" />
+                          ) : (
+                            <Maximize2 className="h-4 w-4" />
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
+                    <div
+                      ref={inputRef}
+                      className={`rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 ${
+                        isInputExpanded
+                          ? 'max-h-none overflow-visible'
+                          : 'max-h-72 overflow-auto'
+                      }`}
+                    >
+                      <pre className="whitespace-pre-wrap break-words text-xs leading-6 text-slate-700">
+                        {activeRunInput || 'No input captured.'}
+                      </pre>
+                    </div>
+                  </div>
+                  <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Result
+                      </p>
+                      {canExpandResult ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            toggleExpanded(setIsResultExpanded, resultRef);
+                          }}
+                          className="text-slate-400 transition hover:text-slate-600"
+                          aria-label={
+                            isResultExpanded ? 'Collapse result' : 'Expand result'
+                          }
+                        >
+                          {isResultExpanded ? (
+                            <Minimize2 className="h-4 w-4" />
+                          ) : (
+                            <Maximize2 className="h-4 w-4" />
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
+                    {activeRun.outputResult ? (
+                      <div
+                        ref={resultRef}
+                        className={`rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm leading-7 text-slate-700 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:font-semibold [&_strong]:font-semibold [&_strong]:text-slate-900 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_li]:my-1 ${
+                          isResultExpanded
+                            ? 'max-h-none overflow-visible'
+                            : 'max-h-72 overflow-auto'
+                        }`}
+                      >
+                        <ReactMarkdown>{activeRun.outputResult}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-600">No output captured.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </>
         )}
       </section>
     </section>
