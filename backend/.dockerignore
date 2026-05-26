@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+*.md
+.prettierrc
+eslint.config.mjs
+coverage
+test
