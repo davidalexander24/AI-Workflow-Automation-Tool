@@ -31,7 +31,7 @@ The architecture strictly separates the frontend presentation layer from the sec
 * **Database:** PostgreSQL (hosted on Supabase)
 * **ORM:** Prisma
 * **AI Integration:** Google Generative AI SDK (Gemini 2.5 Flash Lite)
-* **Deployment:** Railway (via Nixpacks/Node)
+* **Deployment:** Self-hosted (Docker + Tailscale Funnel)
 
 ## ✨ Key Features
 
@@ -85,6 +85,33 @@ Start the development server:
 npm run dev
 ```
 *The frontend will be running on `http://localhost:3001`*
+
+## 🐳 Self-Hosted Deployment
+
+The backend can be deployed to any Linux server using Docker and exposed publicly via Tailscale Funnel.
+
+### Prerequisites
+* Docker & Docker Compose v2
+* Tailscale with Funnel enabled
+
+### Steps
+```bash
+git clone https://github.com/davidalexander24/AI-Workflow-Automation-Tool.git
+cd AI-Workflow-Automation-Tool/backend
+
+cp .env.example .env
+chmod 600 .env
+# Edit .env with your DATABASE_URL and GEMINI_API_KEY
+
+docker compose up -d --build
+```
+
+Expose publicly via Tailscale Funnel:
+```bash
+sudo tailscale funnel --bg --https 10000 http://localhost:3001
+```
+
+The API will be available at `https://<your-hostname>.ts.net:10000`.
 
 ## 🗄️ Database Schema
 
