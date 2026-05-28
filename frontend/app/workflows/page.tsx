@@ -213,7 +213,7 @@ export default function WorkflowsPage() {
               \workflows
             </h1>
             <span className="font-mono text-[24px] md:text-[28px] self-center -ml-2.5 text-accent font-bold">{'>'}</span>
-            <span className="caret self-center h-5 text-xl md:text-2xl bg-accent md:h-6 translate-y-0.5 md:translate-y-0" aria-hidden />
+            <span className="caret self-center h-5 text-xl md:text-2xl bg-accent md:h-6 translate-y-0.3 md:translate-y-0" aria-hidden />
           </div>
           <button
             type="button"
