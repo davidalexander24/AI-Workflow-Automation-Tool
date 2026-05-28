@@ -99,6 +99,18 @@ export default function WorkflowsPage() {
     void loadWorkflows();
   }, []);
 
+  useEffect(() => {
+    if (!dialog) return;
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setDialog(null);
+        setSubmitError(null);
+      }
+    }
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [dialog]);
+
   function openCreate() {
     setForm(initialFormState);
     setSubmitError(null);
@@ -390,7 +402,7 @@ export default function WorkflowsPage() {
               <button
                 type="button"
                 onClick={closeDialog}
-                className="font-mono text-xs text-ink-muted hover:text-ink"
+                className="font-mono text-base leading-none text-ink-muted hover:text-ink"
                 aria-label="Close"
               >
                 [×]
