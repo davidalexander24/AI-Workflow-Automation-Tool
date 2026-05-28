@@ -197,11 +197,11 @@ export default function WorkflowsPage() {
       <header className="border-b border-rule pb-6">
         <div className="flex items-baseline justify-between gap-4">
           <div className="flex items-baseline gap-3">
-            <span className="font-mono text-sm text-accent">{'>'}</span>
             <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink md:text-3xl">
-              workflows
+              \workflows
             </h1>
-            <span className="caret -ml-2.5 self-center h-3 text-2xl bg-accent md:h-6" aria-hidden />
+            <span className="font-mono text-[28px] self-center -ml-2.5 text-accent font-bold">{'>'}</span>
+            <span className="caret self-center h-3 text-2xl bg-accent md:h-6" aria-hidden />
           </div>
           <button
             type="button"
@@ -297,16 +297,13 @@ export default function WorkflowsPage() {
                 >
                   <div className="flex-1">
                     <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-[11px] text-ink-faint">─</span>
+                      <span className="font-mono text-[11px] text-ink-faint">--</span>
                       <Link
                         href={`/workflows/${workflow.id}`}
                         className="font-mono text-sm font-semibold tracking-tight text-ink hover:text-accent"
                       >
                         {slugify(workflow.name)}
                       </Link>
-                      <span className="font-sans text-sm text-ink-muted">
-                        {workflow.name}
-                      </span>
                     </div>
                     <p className="mt-2 font-sans text-sm leading-relaxed text-ink-muted">
                       {workflow.description}
@@ -344,7 +341,7 @@ export default function WorkflowsPage() {
                     <button
                       type="button"
                       onClick={() => openEdit(workflow)}
-                      className="border border-transparent px-3 py-1.5 tracking-wide text-ink-muted hover:border-rule hover:text-ink"
+                      className="border border-transparent px-3 py-1.5 tracking-wide text-ink-muted hover:border-gray-500"
                     >
                       [EDIT]
                     </button>

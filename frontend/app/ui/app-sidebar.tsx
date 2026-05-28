@@ -78,7 +78,7 @@ export function AppSidebar() {
           <span className="font-mono text-[10px] text-ink-faint">v0.1.0</span>
         </Link>
         <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.15em] text-ink-faint">
-          workflow runner
+          AI WORKFLOW AUTOMATION
         </div>
 
         <div className="mt-8 border-t border-rule pt-6">
