@@ -7,7 +7,7 @@ A lightweight, full-stack internal tool designed to help users define, manage, a
 <br>
 
 <div align="center">
-  <img src="./assets/demo.gif" alt="AI Workflow Automation Demo" width="100%" />
+  <img src="./assets/screenshot.png" alt="AI Workflow Automation Demo" width="100%" />
 </div>
 
 <br>
