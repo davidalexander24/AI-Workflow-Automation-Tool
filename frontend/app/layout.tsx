@@ -36,7 +36,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themePrePaintScript }} />
       </head>
       <body className="min-h-screen text-ink antialiased">
-        <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col md:flex-row">
+        <div className="flex min-h-screen w-full flex-col md:flex-row">
           <AppSidebar />
           <main className="flex-1 px-4 py-6 md:px-10 md:py-10">{children}</main>
         </div>
