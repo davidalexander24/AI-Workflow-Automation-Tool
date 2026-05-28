@@ -297,7 +297,7 @@ export default function WorkflowsPage() {
                 >
                   <div className="flex-1">
                     <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-[11px] text-ink-faint">--</span>
+                      <span className="font-mono text-[11px] text-ink-muted">--</span>
                       <Link
                         href={`/workflows/${workflow.id}`}
                         className="font-mono text-sm font-semibold tracking-tight text-ink hover:text-accent"
