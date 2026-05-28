@@ -212,8 +212,8 @@ export default function WorkflowsPage() {
             <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink md:text-3xl">
               \workflows
             </h1>
-            <span className="font-mono text-[28px] self-center -ml-2.5 text-accent font-bold">{'>'}</span>
-            <span className="caret self-center h-3 text-2xl bg-accent md:h-6" aria-hidden />
+            <span className="font-mono text-[24px] md:text-[28px] self-center -ml-2.5 text-accent font-bold">{'>'}</span>
+            <span className="caret self-center h-5 text-xl md:text-2xl bg-accent md:h-6 translate-y-0.5 md:translate-y-0" aria-hidden />
           </div>
           <button
             type="button"
@@ -223,7 +223,7 @@ export default function WorkflowsPage() {
             [+ NEW]
           </button>
         </div>
-        <p className="mt-3 font-sans text-sm text-ink-muted">
+        <p className="mt-3 font-sans text-xs md:text-sm text-ink-muted">
           # Define prompt blueprints. Run them with structured input. Inspect every execution.
         </p>
       </header>
