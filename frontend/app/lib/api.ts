@@ -41,6 +41,10 @@ export async function requestJson<T>(
     throw new Error(errorMessage);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 
@@ -52,9 +56,26 @@ export type Workflow = {
   createdAt: string;
 };
 
+export type WorkflowRun = {
+  id: string;
+  workflowId: string;
+  inputData: unknown;
+  outputResult: string;
+  status: 'pending' | 'success' | 'failed';
+  createdAt: string;
+};
+
 export type ExecuteWorkflowResponse = {
   workflowId: string;
   runId: string;
   status: 'pending' | 'success' | 'failed';
   outputResult: string;
 };
+
+export type CreateWorkflowPayload = {
+  name: string;
+  description: string;
+  promptTemplate: string;
+};
+
+export type UpdateWorkflowPayload = Partial<CreateWorkflowPayload>;

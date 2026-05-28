@@ -14,9 +14,12 @@ const sourceCodePro = Source_Code_Pro({
 });
 
 export const metadata: Metadata = {
-  title: "AI Workflow Automation",
-  description: "Build and execute AI workflows from a unified dashboard.",
+  title: "AI/WFA:~$ workflow runner",
+  description:
+    "Define prompt blueprints, run them with structured input, and inspect every execution.",
 };
+
+const themePrePaintScript = `(function(){try{var t=localStorage.getItem('wfa-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}else{document.documentElement.setAttribute('data-theme','dark');}}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();`;
 
 export default function RootLayout({
   children,
@@ -26,19 +29,16 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${spaceGrotesk.variable} ${sourceCodePro.variable} h-full antialiased`}
+      data-theme="dark"
+      className={`${spaceGrotesk.variable} ${sourceCodePro.variable}`}
     >
-      <body className="min-h-full bg-background text-foreground">
-        <div className="relative min-h-screen">
-          <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(13,148,136,0.16),transparent_42%),radial-gradient(circle_at_bottom_right,rgba(249,115,22,0.12),transparent_35%)]" />
-
-          <div className="mx-auto flex min-h-screen w-full max-w-425 flex-col md:flex-row">
-            <AppSidebar />
-
-            <main className="flex-1 px-4 pb-8 pt-6 md:px-8 md:pt-10">
-              {children}
-            </main>
-          </div>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themePrePaintScript }} />
+      </head>
+      <body className="min-h-screen text-ink antialiased">
+        <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col md:flex-row">
+          <AppSidebar />
+          <main className="flex-1 px-4 py-6 md:px-10 md:py-10">{children}</main>
         </div>
       </body>
     </html>

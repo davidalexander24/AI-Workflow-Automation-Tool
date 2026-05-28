@@ -9,6 +9,31 @@ import {
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
+import { UpdateWorkflowDto } from './dto/update-workflow.dto';
+
+const VARIABLE_TOKEN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+
+function applyTemplate(template: string, input: unknown): string {
+  if (input === null || input === undefined) {
+    return template;
+  }
+
+  if (typeof input === 'string') {
+    return template.replace(/\{\{\s*input\s*\}\}/g, input);
+  }
+
+  if (typeof input === 'object' && !Array.isArray(input)) {
+    return template.replace(VARIABLE_TOKEN, (_, name: string) => {
+      const value = (input as Record<string, unknown>)[name];
+      if (value === undefined || value === null) {
+        return '';
+      }
+      return typeof value === 'string' ? value : JSON.stringify(value);
+    });
+  }
+
+  return template.replace(/\{\{\s*input\s*\}\}/g, JSON.stringify(input));
+}
 
 @Injectable()
 export class WorkflowsService {
@@ -87,6 +112,65 @@ export class WorkflowsService {
     return workflow;
   }
 
+  async updateWorkflow(workflowId: string, dto: UpdateWorkflowDto) {
+    const existing = await this.prisma.workflow.findUnique({
+      where: { id: workflowId },
+    });
+
+    if (!existing) {
+      throw new NotFoundException(`Workflow ${workflowId} not found.`);
+    }
+
+    const data: { name?: string; description?: string; promptTemplate?: string } = {};
+
+    if (dto.name !== undefined) {
+      const trimmed = dto.name.trim();
+      if (!trimmed) {
+        throw new BadRequestException('name cannot be empty.');
+      }
+      data.name = trimmed;
+    }
+
+    if (dto.description !== undefined) {
+      const trimmed = dto.description.trim();
+      if (!trimmed) {
+        throw new BadRequestException('description cannot be empty.');
+      }
+      data.description = trimmed;
+    }
+
+    if (dto.promptTemplate !== undefined) {
+      const trimmed = dto.promptTemplate.trim();
+      if (!trimmed) {
+        throw new BadRequestException('promptTemplate cannot be empty.');
+      }
+      data.promptTemplate = trimmed;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return existing;
+    }
+
+    return this.prisma.workflow.update({
+      where: { id: workflowId },
+      data,
+    });
+  }
+
+  async deleteWorkflow(workflowId: string) {
+    const existing = await this.prisma.workflow.findUnique({
+      where: { id: workflowId },
+    });
+
+    if (!existing) {
+      throw new NotFoundException(`Workflow ${workflowId} not found.`);
+    }
+
+    await this.prisma.workflow.delete({ where: { id: workflowId } });
+
+    return { id: workflowId, deleted: true };
+  }
+
   async getWorkflowRuns(workflowId: string) {
     await this.getWorkflowById(workflowId);
 
@@ -117,12 +201,7 @@ export class WorkflowsService {
       );
     }
 
-    const inputAsString =
-      typeof inputData === 'string' ? inputData : JSON.stringify(inputData);
-    const prompt = workflow.promptTemplate.replace(
-      /\{\{\s*input\s*\}\}/g,
-      inputAsString,
-    );
+    const prompt = applyTemplate(workflow.promptTemplate, inputData);
 
     const workflowRun = await this.prisma.workflowRun.create({
       data: {
