@@ -70,7 +70,24 @@ export type ExecuteWorkflowResponse = {
   runId: string;
   status: 'pending' | 'success' | 'failed';
   outputResult: string;
+  model?: string;
+  temperature?: number;
 };
+
+export const GEMINI_MODELS = [
+  { id: 'gemini-3.1-flash-lite', label: '3.1 flash-lite', hint: 'fast · 500 req/day' },
+  { id: 'gemini-3.5-flash', label: '3.5 flash', hint: 'GA · most capable' },
+  { id: 'gemini-3-flash-preview', label: '3 flash', hint: 'preview' },
+  { id: 'gemini-2.5-flash', label: '2.5 flash', hint: 'stable' },
+  { id: 'gemini-2.5-flash-lite', label: '2.5 flash-lite', hint: 'stable · fast' },
+] as const;
+
+export type GeminiModelId = (typeof GEMINI_MODELS)[number]['id'];
+
+export const DEFAULT_MODEL: GeminiModelId = 'gemini-3.1-flash-lite';
+export const DEFAULT_TEMPERATURE = 1;
+export const MIN_TEMPERATURE = 0;
+export const MAX_TEMPERATURE = 2;
 
 export type CreateWorkflowPayload = {
   name: string;

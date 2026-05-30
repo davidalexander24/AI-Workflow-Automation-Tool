@@ -13,7 +13,13 @@ import {
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
+  DEFAULT_MODEL,
+  DEFAULT_TEMPERATURE,
   ExecuteWorkflowResponse,
+  GEMINI_MODELS,
+  GeminiModelId,
+  MAX_TEMPERATURE,
+  MIN_TEMPERATURE,
   Workflow,
   WorkflowRun,
   requestJson,
@@ -91,6 +97,10 @@ export default function ExecuteWorkflowPage() {
   const [singleInput, setSingleInput] = useState('');
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
 
+  // model config
+  const [model, setModel] = useState<GeminiModelId>(DEFAULT_MODEL);
+  const [temperature, setTemperature] = useState<number>(DEFAULT_TEMPERATURE);
+
   // run state
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -98,6 +108,7 @@ export default function ExecuteWorkflowPage() {
   const [resultStatus, setResultStatus] = useState<'pending' | 'success' | 'failed' | null>(null);
   const [resultDuration, setResultDuration] = useState<number | null>(null);
   const [completedAt, setCompletedAt] = useState<string | null>(null);
+  const [resultMeta, setResultMeta] = useState<{ model: string; temperature: number } | null>(null);
 
   // history state
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
@@ -224,6 +235,7 @@ export default function ExecuteWorkflowPage() {
     setResult('');
     setResultDuration(null);
     setCompletedAt(null);
+    setResultMeta(null);
 
     const startedAt = performance.now();
 
@@ -232,7 +244,7 @@ export default function ExecuteWorkflowPage() {
         `/workflows/${workflowId}/execute`,
         {
           method: 'POST',
-          body: JSON.stringify({ inputData: payload }),
+          body: JSON.stringify({ inputData: payload, model, temperature }),
         },
       );
       const duration = Math.round(performance.now() - startedAt);
@@ -240,6 +252,10 @@ export default function ExecuteWorkflowPage() {
       setResultStatus(response.status);
       setResultDuration(duration);
       setCompletedAt(new Date().toISOString());
+      setResultMeta({
+        model: response.model ?? model,
+        temperature: response.temperature ?? temperature,
+      });
       await loadRuns(false);
     } catch (error) {
       const duration = Math.round(performance.now() - startedAt);
@@ -249,6 +265,7 @@ export default function ExecuteWorkflowPage() {
       setResultStatus('failed');
       setResultDuration(duration);
       setCompletedAt(new Date().toISOString());
+      setResultMeta({ model, temperature });
       void loadRuns(false);
     } finally {
       setIsRunning(false);
@@ -442,6 +459,53 @@ export default function ExecuteWorkflowPage() {
           </div>
         )}
 
+        {/* Model config */}
+        <div className="border border-rule">
+          <div className="border-b border-rule bg-bg-elev px-3 py-2">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+              {'// model config'}
+            </span>
+          </div>
+          <div className="flex flex-col gap-4 px-3 py-3 sm:flex-row sm:items-center sm:gap-8">
+            <label className="flex items-center gap-3 font-mono text-[11px]">
+              <span className="text-ink-faint">model</span>
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value as GeminiModelId)}
+                className="border border-rule bg-bg px-2 py-1 font-mono text-[12px] text-ink focus:border-accent focus:outline-none"
+              >
+                {GEMINI_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} ({m.hint})
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex flex-1 items-center gap-3 font-mono text-[11px]">
+              <span className="text-ink-faint">temp</span>
+              <input
+                type="range"
+                min={MIN_TEMPERATURE}
+                max={MAX_TEMPERATURE}
+                step={0.1}
+                value={temperature}
+                onChange={(e) => setTemperature(Number(e.target.value))}
+                className="h-1 flex-1 cursor-pointer accent-accent"
+                aria-label="Temperature"
+              />
+              <span className="w-7 text-right text-ink">{temperature.toFixed(1)}</span>
+              <span className="text-ink-faint">
+                {temperature <= 0.4
+                  ? 'precise'
+                  : temperature >= 1.3
+                    ? 'creative'
+                    : 'balanced'}
+              </span>
+            </label>
+          </div>
+        </div>
+
         {runError ? (
           <div className="border border-fail/40 bg-fail/10 px-3 py-2 font-mono text-xs text-fail">
             [ERROR] {runError}
@@ -470,6 +534,12 @@ export default function ExecuteWorkflowPage() {
               {'// result'}
             </span>
             {resultStatus ? <StatusTag status={resultStatus} /> : null}
+            {resultMeta ? (
+              <span className="font-mono text-[11px] text-ink-faint">
+                {resultMeta.model.replace(/^gemini-/, '')} · temp{' '}
+                {resultMeta.temperature.toFixed(1)}
+              </span>
+            ) : null}
             {resultDuration !== null ? (
               <span className="font-mono text-[11px] text-ink-faint">
                 {formatDuration(resultDuration)}

@@ -54,6 +54,9 @@ export class WorkflowsController {
     @Param('id') workflowId: string,
     @Body() body: ExecuteWorkflowDto,
   ) {
-    return this.workflowsService.executeWorkflow(workflowId, body.inputData);
+    return this.workflowsService.executeWorkflow(workflowId, body.inputData, {
+      model: body.model,
+      temperature: body.temperature,
+    });
   }
 }
