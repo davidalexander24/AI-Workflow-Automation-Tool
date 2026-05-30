@@ -75,6 +75,15 @@ function downloadText(filename: string, content: string, mime: string): void {
   URL.revokeObjectURL(url);
 }
 
+function formatModelTag(
+  model?: string | null,
+  temperature?: number | null,
+): string | null {
+  if (!model) return null;
+  const short = model.replace(/^gemini-/, '');
+  return temperature == null ? short : `${short} · t${temperature.toFixed(1)}`;
+}
+
 function formatRunInput(input: unknown): string {
   if (input === null || input === undefined) return '';
   if (typeof input === 'string') return input;
@@ -642,11 +651,16 @@ export default function ExecuteWorkflowPage() {
               return (
                 <li key={run.id} className="px-1 py-3 sm:px-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:gap-4">
-                    <div className="flex items-baseline gap-3">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                       <StatusTag status={run.status} />
                       <span className="font-mono text-[11px] text-ink-faint">
                         {formatTimestamp(run.createdAt)}
                       </span>
+                      {run.model ? (
+                        <span className="font-mono text-[11px] text-ink-faint">
+                          · {formatModelTag(run.model, run.temperature)}
+                        </span>
+                      ) : null}
                     </div>
                     <p className="flex-1 truncate font-sans text-sm text-ink-muted">
                       {truncate(run.outputResult || '- no output -', 140)}
@@ -672,7 +686,21 @@ export default function ExecuteWorkflowPage() {
                   </div>
 
                   {isOpen && activeRun ? (
-                    <div className="mt-4 grid gap-4 border-l-2 border-accent/40 pl-4 md:grid-cols-2">
+                    <div className="mt-4 border-l-2 border-accent/40 pl-4">
+                      {activeRun.model ? (
+                        <p className="mb-3 font-mono text-[11px] text-ink-faint">
+                          <span className="uppercase tracking-wider">
+                            {'// run config'}
+                          </span>{' '}
+                          model:{' '}
+                          <span className="text-ink-muted">{activeRun.model}</span>
+                          {' · '}temp:{' '}
+                          <span className="text-ink-muted">
+                            {activeRun.temperature?.toFixed(1) ?? 'n/a'}
+                          </span>
+                        </p>
+                      ) : null}
+                      <div className="grid gap-4 md:grid-cols-2">
                       <div>
                         <p className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
                           {'// input'}
@@ -697,6 +725,7 @@ export default function ExecuteWorkflowPage() {
                             - no output -
                           </p>
                         )}
+                      </div>
                       </div>
                     </div>
                   ) : null}

@@ -264,6 +264,8 @@ export class WorkflowsService {
         inputData: inputData as any,
         outputResult: '',
         status: 'pending',
+        model: modelName,
+        temperature,
       },
     });
 

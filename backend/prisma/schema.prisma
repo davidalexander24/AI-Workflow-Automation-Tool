@@ -29,6 +29,8 @@ model WorkflowRun {
   inputData    Json
   outputResult String
   status       WorkflowRunStatus @default(pending)
+  model        String?
+  temperature  Float?
   createdAt    DateTime          @default(now())
 }
 

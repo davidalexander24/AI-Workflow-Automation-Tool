@@ -62,6 +62,8 @@ export type WorkflowRun = {
   inputData: unknown;
   outputResult: string;
   status: 'pending' | 'success' | 'failed';
+  model?: string | null;
+  temperature?: number | null;
   createdAt: string;
 };
 
