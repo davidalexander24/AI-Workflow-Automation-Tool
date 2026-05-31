@@ -75,6 +75,23 @@ function downloadText(filename: string, content: string, mime: string): void {
   URL.revokeObjectURL(url);
 }
 
+function cleanOutputPreview(output: string): string {
+  if (!output) return '';
+  return output
+    .slice(0, 600) // cap work; preview only needs the start
+    .replace(/```[\s\S]*?```/g, ' ') // drop fenced code blocks
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // image -> alt text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // link -> link text
+    .replace(/^#{1,6}\s+/gm, '') // heading markers
+    .replace(/^>\s?/gm, '') // blockquotes
+    .replace(/^[-*+]\s+/gm, '') // bullet markers
+    .replace(/^\d+\.\s+/gm, '') // numbered-list markers
+    .replace(/^[-*_]{3,}\s*$/gm, ' ') // horizontal rules
+    .replace(/(\*\*|\*|__|_|~~|`)/g, '') // emphasis + inline code
+    .replace(/\s+/g, ' ') // collapse newlines/whitespace
+    .trim();
+}
+
 function formatModelTag(
   model?: string | null,
   temperature?: number | null,
@@ -663,7 +680,7 @@ export default function ExecuteWorkflowPage() {
                       ) : null}
                     </div>
                     <p className="flex-1 truncate font-sans text-sm text-ink-muted">
-                      {truncate(run.outputResult || '- no output -', 140)}
+                      {truncate(cleanOutputPreview(run.outputResult) || '- no output -', 140)}
                     </p>
                     <div className="flex shrink-0 items-center gap-1 font-mono text-[11px]">
                       <button
