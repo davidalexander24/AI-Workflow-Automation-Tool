@@ -13,17 +13,73 @@ import { UpdateWorkflowDto } from './dto/update-workflow.dto';
 
 const VARIABLE_TOKEN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 
-const SUPPORTED_MODELS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3.5-flash',
-  'gemini-3-flash-preview',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-] as const;
+type ModelProvider = 'google' | 'github' | 'groq' | 'cerebras' | 'openrouter';
 
-type SupportedModel = (typeof SUPPORTED_MODELS)[number];
+interface OpenAICompatProvider {
+  baseUrl: string;
+  apiKeyEnv: string;
+  label: string;
+}
 
-const DEFAULT_MODEL: SupportedModel = 'gemini-3.1-flash-lite';
+const OPENAI_COMPAT_PROVIDERS: Record<
+  Exclude<ModelProvider, 'google'>,
+  OpenAICompatProvider
+> = {
+  github: {
+    baseUrl: 'https://models.github.ai/inference/chat/completions',
+    apiKeyEnv: 'GITHUB_MODELS_TOKEN',
+    label: 'GitHub Models',
+  },
+  groq: {
+    baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    apiKeyEnv: 'GROQ_API_KEY',
+    label: 'Groq',
+  },
+  cerebras: {
+    baseUrl: 'https://api.cerebras.ai/v1/chat/completions',
+    apiKeyEnv: 'CEREBRAS_API_KEY',
+    label: 'Cerebras',
+  },
+  openrouter: {
+    baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
+    label: 'OpenRouter',
+  },
+};
+
+const MODEL_REGISTRY: Record<string, ModelProvider> = {
+  'gemini-3.1-flash-lite': 'google',
+  'gemini-3.5-flash': 'google',
+  'gemini-3-flash-preview': 'google',
+  'gemini-2.5-flash': 'google',
+  'gemini-2.5-flash-lite': 'google',
+  'openai/gpt-5': 'github',
+  'openai/gpt-4o': 'github',
+  'openai/gpt-4.1-mini': 'github',
+  'deepseek/deepseek-r1': 'github',
+  'moonshotai/kimi-k2.6:free': 'openrouter',
+  'llama-3.3-70b-versatile': 'groq',
+  'llama-3.1-8b-instant': 'groq',
+  'qwen/qwen3-32b': 'groq',
+  'gpt-oss-120b': 'cerebras',
+  'zai-glm-4.7': 'cerebras',
+};
+
+// Some models (GPT-5 / o-series via GitHub Models) reject a custom temperature
+// and only accept the provider default. Omit the field for these.
+const NO_TEMPERATURE_MODELS = new Set<string>([
+  'openai/gpt-5',
+  'openai/gpt-5-mini',
+  'openai/gpt-5-nano',
+  'openai/o1',
+  'openai/o3',
+  'openai/o3-mini',
+  'openai/o4-mini',
+]);
+
+const SUPPORTED_MODELS = Object.keys(MODEL_REGISTRY);
+
+const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 const DEFAULT_TEMPERATURE = 1;
 const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
@@ -78,18 +134,18 @@ export class WorkflowsService {
     return 'Workflow execution failed due to an upstream AI provider error.';
   }
 
-  private resolveModel(model?: string): SupportedModel {
+  private resolveModel(model?: string): string {
     if (model === undefined || model === null || model === '') {
       return DEFAULT_MODEL;
     }
 
-    if (!SUPPORTED_MODELS.includes(model as SupportedModel)) {
+    if (!(model in MODEL_REGISTRY)) {
       throw new BadRequestException(
         `Unsupported model "${model}". Supported models: ${SUPPORTED_MODELS.join(', ')}.`,
       );
     }
 
-    return model as SupportedModel;
+    return model;
   }
 
   private resolveTemperature(temperature?: number): number {
@@ -120,6 +176,94 @@ export class WorkflowsService {
     }
 
     return HttpStatus.BAD_GATEWAY;
+  }
+
+  private async generateViaGoogle(
+    model: string,
+    prompt: string,
+    temperature: number,
+  ): Promise<string> {
+    const apiKey = process.env.GEMINI_API_KEY as string;
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const generativeModel = genAI.getGenerativeModel({
+      model,
+      generationConfig: { temperature },
+    });
+    const response = await generativeModel.generateContent(prompt);
+    return response.response.text();
+  }
+
+  private async generateViaOpenAICompatible(
+    provider: OpenAICompatProvider,
+    model: string,
+    prompt: string,
+    temperature: number,
+  ): Promise<string> {
+    const apiKey = process.env[provider.apiKeyEnv] as string;
+
+    const payload: Record<string, unknown> = {
+      model,
+      messages: [{ role: 'user', content: prompt }],
+    };
+    if (!NO_TEMPERATURE_MODELS.has(model)) {
+      payload.temperature = temperature;
+    }
+
+    const res = await fetch(provider.baseUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      let message = `${provider.label} request failed with status ${res.status}.`;
+      try {
+        const body = (await res.json()) as {
+          error?: {
+            message?: string;
+            metadata?: { provider_name?: string; raw?: unknown };
+          };
+        };
+        if (body?.error?.message) {
+          message = body.error.message;
+        }
+        const meta = body?.error?.metadata;
+        if (meta) {
+          const raw =
+            typeof meta.raw === 'string'
+              ? meta.raw
+              : meta.raw
+                ? JSON.stringify(meta.raw)
+                : '';
+          const extra = [meta.provider_name, raw]
+            .filter(Boolean)
+            .join(': ')
+            .slice(0, 200);
+          if (extra) {
+            message = `${message} (${extra})`;
+          }
+        }
+      } catch {
+        // keep the status-based fallback message
+      }
+      const error = new Error(message) as Error & { status?: number };
+      error.status = res.status;
+      throw error;
+    }
+
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const text = data?.choices?.[0]?.message?.content;
+
+    if (typeof text !== 'string' || !text.trim()) {
+      throw new Error(`${provider.label} returned an empty response.`);
+    }
+
+    return text;
   }
 
   async createWorkflow(dto: CreateWorkflowDto) {
@@ -225,7 +369,6 @@ export class WorkflowsService {
     return this.prisma.workflowRun.findMany({
       where: { workflowId },
       orderBy: { createdAt: 'desc' },
-      take: 10,
     });
   }
 
@@ -240,6 +383,11 @@ export class WorkflowsService {
 
     const modelName = this.resolveModel(options.model);
     const temperature = this.resolveTemperature(options.temperature);
+    // Models that ignore a custom temperature are recorded with null so the
+    // run history reflects what was actually applied.
+    const appliedTemperature = NO_TEMPERATURE_MODELS.has(modelName)
+      ? null
+      : temperature;
 
     const workflow = await this.prisma.workflow.findUnique({
       where: { id: workflowId },
@@ -249,11 +397,20 @@ export class WorkflowsService {
       throw new NotFoundException(`Workflow ${workflowId} not found.`);
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new InternalServerErrorException(
-        'Missing GEMINI_API_KEY environment variable.',
-      );
+    const provider = MODEL_REGISTRY[modelName];
+    if (provider === 'google') {
+      if (!process.env.GEMINI_API_KEY) {
+        throw new InternalServerErrorException(
+          'Missing GEMINI_API_KEY environment variable.',
+        );
+      }
+    } else {
+      const { apiKeyEnv } = OPENAI_COMPAT_PROVIDERS[provider];
+      if (!process.env[apiKeyEnv]) {
+        throw new InternalServerErrorException(
+          `Missing ${apiKeyEnv} environment variable.`,
+        );
+      }
     }
 
     const prompt = applyTemplate(workflow.promptTemplate, inputData);
@@ -265,18 +422,20 @@ export class WorkflowsService {
         outputResult: '',
         status: 'pending',
         model: modelName,
-        temperature,
+        temperature: appliedTemperature,
       },
     });
 
     try {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig: { temperature },
-      });
-      const response = await model.generateContent(prompt);
-      const outputResult = response.response.text();
+      const outputResult =
+        provider === 'google'
+          ? await this.generateViaGoogle(modelName, prompt, temperature)
+          : await this.generateViaOpenAICompatible(
+              OPENAI_COMPAT_PROVIDERS[provider],
+              modelName,
+              prompt,
+              temperature,
+            );
 
       const updatedRun = await this.prisma.workflowRun.update({
         where: { id: workflowRun.id },
@@ -292,7 +451,7 @@ export class WorkflowsService {
         status: updatedRun.status,
         outputResult: updatedRun.outputResult,
         model: modelName,
-        temperature,
+        temperature: appliedTemperature,
       };
     } catch (error) {
       const outputResult =

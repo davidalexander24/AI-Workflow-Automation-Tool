@@ -16,10 +16,10 @@ import {
   DEFAULT_MODEL,
   DEFAULT_TEMPERATURE,
   ExecuteWorkflowResponse,
-  GEMINI_MODELS,
-  GeminiModelId,
+  MODELS,
   MAX_TEMPERATURE,
   MIN_TEMPERATURE,
+  ModelId,
   Workflow,
   WorkflowRun,
   requestJson,
@@ -92,12 +92,17 @@ function cleanOutputPreview(output: string): string {
     .trim();
 }
 
+function shortModelName(id: string): string {
+  const last = id.includes('/') ? (id.split('/').pop() ?? id) : id;
+  return last.replace(/:free$/, '').replace(/^gemini-/, '');
+}
+
 function formatModelTag(
   model?: string | null,
   temperature?: number | null,
 ): string | null {
   if (!model) return null;
-  const short = model.replace(/^gemini-/, '');
+  const short = shortModelName(model);
   return temperature == null ? short : `${short} · t${temperature.toFixed(1)}`;
 }
 
@@ -124,7 +129,7 @@ export default function ExecuteWorkflowPage() {
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
 
   // model config
-  const [model, setModel] = useState<GeminiModelId>(DEFAULT_MODEL);
+  const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
   const [temperature, setTemperature] = useState<number>(DEFAULT_TEMPERATURE);
 
   // run state
@@ -497,13 +502,17 @@ export default function ExecuteWorkflowPage() {
               <span className="text-ink-faint">model</span>
               <select
                 value={model}
-                onChange={(e) => setModel(e.target.value as GeminiModelId)}
+                onChange={(e) => setModel(e.target.value as ModelId)}
                 className="border border-rule bg-bg px-2 py-1 font-mono text-[12px] text-ink focus:border-accent focus:outline-none"
               >
-                {GEMINI_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label} ({m.hint})
-                  </option>
+                {[...new Set(MODELS.map((m) => m.maker))].map((maker) => (
+                  <optgroup key={maker} label={maker}>
+                    {MODELS.filter((m) => m.maker === maker).map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>
@@ -562,7 +571,7 @@ export default function ExecuteWorkflowPage() {
             {resultStatus ? <StatusTag status={resultStatus} /> : null}
             {resultMeta ? (
               <span className="font-mono text-[11px] text-ink-faint">
-                {resultMeta.model.replace(/^gemini-/, '')} · temp{' '}
+                {shortModelName(resultMeta.model)} · temp{' '}
                 {resultMeta.temperature.toFixed(1)}
               </span>
             ) : null}
