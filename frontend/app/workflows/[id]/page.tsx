@@ -372,7 +372,7 @@ export default function ExecuteWorkflowPage() {
       <section className="mx-auto w-full max-w-4xl space-y-4">
         <Link
           href="/workflows"
-          className="font-mono text-xs tracking-wide text-ink-muted hover:text-ink"
+          className="inline-block -ml-3 border border-transparent px-3 py-1.5 font-mono text-sm tracking-wide text-ink-muted hover:border-gray-500 hover:text-ink"
         >
           ← workflows
         </Link>
@@ -389,7 +389,7 @@ export default function ExecuteWorkflowPage() {
       <div>
         <Link
           href="/workflows"
-          className="font-mono text-xs tracking-wide text-ink-muted hover:text-ink"
+          className="inline-block -ml-3 border border-transparent px-3 py-1.5 font-mono text-sm tracking-wide text-ink-muted hover:border-gray-500 hover:text-ink"
         >
           ← workflows
         </Link>
