@@ -38,7 +38,7 @@ export function CopyButton({
       type="button"
       onClick={handleCopy}
       disabled={!value}
-      className={`font-mono text-[11px] tracking-wide text-ink-muted transition hover:text-ink disabled:opacity-40 disabled:hover:text-ink-muted ${className}`}
+      className={`font-mono text-[11px] tracking-wide text-ink-muted opacity-70 transition-opacity hover:opacity-100 disabled:opacity-40 disabled:hover:opacity-40 ${className}`}
     >
       [{copied ? 'COPIED' : label}]
     </button>

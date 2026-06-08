@@ -376,7 +376,7 @@ export default function WorkflowsPage() {
             type="button"
             onClick={() => void loadWorkflows(true)}
             disabled={isRefreshing}
-            className="font-mono text-[11px] tracking-wide text-ink-muted hover:text-ink disabled:opacity-50"
+            className="font-mono text-[11px] tracking-wide text-ink-muted opacity-70 transition-opacity hover:opacity-100 disabled:opacity-50 disabled:hover:opacity-50"
           >
             {isRefreshing ? '[refreshing…]' : '[↻ refresh]'}
           </button>

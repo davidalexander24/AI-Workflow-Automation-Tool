@@ -592,7 +592,7 @@ export default function ExecuteWorkflowPage() {
               type="button"
               onClick={downloadResult}
               disabled={!result}
-              className="font-mono text-[11px] tracking-wide text-ink-muted hover:text-ink disabled:opacity-40 disabled:hover:text-ink-muted"
+              className="font-mono text-[11px] tracking-wide text-ink-muted opacity-70 transition-opacity hover:opacity-100 disabled:opacity-40 disabled:hover:opacity-40"
             >
               [DOWNLOAD .md]
             </button>
@@ -624,7 +624,7 @@ export default function ExecuteWorkflowPage() {
           <button
             type="button"
             onClick={() => void loadRuns(true)}
-            className="font-mono text-[11px] tracking-wide text-ink-muted hover:text-ink"
+            className="font-mono text-[11px] tracking-wide text-ink-muted opacity-70 transition-opacity hover:opacity-100"
           >
             [↻ refresh]
           </button>
