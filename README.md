@@ -54,9 +54,9 @@ Models are grouped in the UI by their maker. Each is routed to the appropriate p
 * **Dynamic Prompt Templates:** Create reusable prompts with named `{{variable}}` tokens. The run page detects them and renders one labelled input per variable (falling back to a single text/JSON field for the legacy `{{input}}` convention).
 * **Multi-Provider Model Selection:** Pick any model from a maker-grouped dropdown and adjust temperature per run. The backend routes each request to the correct provider (Google, GitHub Models, Groq, Cerebras, OpenRouter) and records the model and temperature used. Models that ignore custom temperature (e.g. GPT-5) are handled automatically.
 * **Workflow Management:** Full create, edit, and delete for workflows, plus client-side search across the library.
-* **Secure AI Orchestration:** The backend acts as a secure proxy, isolating every provider API key and normalizing rate limits and upstream errors (e.g. surfacing OpenRouter provider detail and catching `429 Too Many Requests`).
+* **Secure AI Orchestration:** The backend acts as a secure proxy, isolating every provider API key and normalizing upstream errors. Full provider error detail is logged server-side only; clients and run history get a generic message (provider `429 Too Many Requests` keeps its status so the UI can surface rate limiting).
 * **Execution History:** Every run is logged with its status (pending, success, failed), timestamp, model, and temperature. Runs can be re-run with their original input and their output copied or downloaded as Markdown.
-* **CORS-Protected API:** The NestJS backend is configured to safely accept cross-origin requests from the Vercel frontend domain.
+* **Hardened Public API:** Per-IP rate limiting (60 requests/min globally, 10 executions/min), request validation with length caps on every field, an environment-driven CORS allowlist (defaults to the Vercel frontend domain plus localhost), and helmet security headers. The backend runs as a non-root, capability-dropped container behind Tailscale Funnel, and the frontend ships a Content Security Policy.
 
 ## Local Setup & Development
 
@@ -124,7 +124,9 @@ cd AI-Workflow-Automation-Tool/backend
 
 cp .env.example .env
 chmod 600 .env
-# Edit .env with your DATABASE_URL and provider API key(s)
+# Edit .env with your DATABASE_URL and provider API key(s).
+# Optionally set CORS_ORIGINS (comma-separated) to override the default
+# allowlist of the production frontend origin plus localhost.
 
 docker compose up -d --build
 ```
