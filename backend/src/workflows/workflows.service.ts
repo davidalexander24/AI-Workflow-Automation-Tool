@@ -4,6 +4,7 @@ import {
   HttpStatus,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -113,6 +114,8 @@ function applyTemplate(template: string, input: unknown): string {
 
 @Injectable()
 export class WorkflowsService {
+  private readonly logger = new Logger(WorkflowsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   private extractProviderErrorMessage(error: unknown): string {
@@ -176,6 +179,27 @@ export class WorkflowsService {
     }
 
     return HttpStatus.BAD_GATEWAY;
+  }
+
+  // Provider error text can include internal URLs, model details, or other
+  // upstream internals; clients only get a generic message. 429 keeps its
+  // status so the UI can surface rate limiting.
+  private toSafeExecutionError(error: unknown): {
+    message: string;
+    status: number;
+  } {
+    if (this.extractProviderStatus(error) === HttpStatus.TOO_MANY_REQUESTS) {
+      return {
+        message:
+          'The AI provider rate-limited this request. Please try again shortly.',
+        status: HttpStatus.TOO_MANY_REQUESTS,
+      };
+    }
+
+    return {
+      message: 'Workflow execution failed due to an upstream AI provider error.',
+      status: HttpStatus.BAD_GATEWAY,
+    };
   }
 
   private async generateViaGoogle(
@@ -454,21 +478,24 @@ export class WorkflowsService {
         temperature: appliedTemperature,
       };
     } catch (error) {
-      const outputResult =
-        error instanceof Error ? error.message : 'Unknown execution error.';
+      this.logger.error(
+        `Workflow ${workflowId} run ${workflowRun.id} failed: ${this.extractProviderErrorMessage(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
 
+      const safe = this.toSafeExecutionError(error);
+
+      // Store the sanitized message too: run history is readable by any
+      // client via GET /workflows/:id/runs.
       await this.prisma.workflowRun.update({
         where: { id: workflowRun.id },
         data: {
-          outputResult,
+          outputResult: safe.message,
           status: 'failed',
         },
       });
 
-      throw new HttpException(
-        this.extractProviderErrorMessage(error),
-        this.extractProviderStatus(error),
-      );
+      throw new HttpException(safe.message, safe.status);
     }
   }
 }

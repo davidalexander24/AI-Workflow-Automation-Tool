@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { ExecuteWorkflowDto } from './dto/execute-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
@@ -49,6 +50,9 @@ export class WorkflowsController {
     return this.workflowsService.getWorkflowRuns(workflowId);
   }
 
+  // Tighter than the global limit: this is the only route that consumes
+  // AI provider quota.
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @Post(':id/execute')
   executeWorkflow(
     @Param('id') workflowId: string,
