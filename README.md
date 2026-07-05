@@ -44,7 +44,6 @@ Models are grouped in the UI by their maker. Each is routed to the appropriate p
 | **OpenAI** | GPT-OSS 120B | Cerebras |
 | **Meta** | Llama 3.3 70B, Llama 3.1 8B | Groq |
 | **DeepSeek** | DeepSeek R1 | GitHub Models |
-| **xAI** | Grok 3 | GitHub Models |
 | **Alibaba** | Qwen3 32B | Groq |
 | **Moonshot** | Kimi K2.6 | OpenRouter |
 | **Z.ai** | GLM 4.7 | Cerebras |
@@ -63,7 +62,7 @@ Models are grouped in the UI by their maker. Each is routed to the appropriate p
 If you wish to run this project locally, you will need two separate terminal windows for the frontend and backend.
 
 ### Prerequisites
-* Node.js (v18+)
+* Node.js (v20+)
 * A Supabase project (PostgreSQL)
 * At least one provider API key. A free [Google Gemini](https://aistudio.google.com/apikey) key is recommended (it powers the default model); the others below are optional and only needed for their models.
 
@@ -136,7 +135,14 @@ Expose publicly via Tailscale Funnel:
 sudo tailscale funnel --bg --https 10000 http://localhost:3001
 ```
 
-The API will be available at `https://<your-hostname>.ts.net:10000`.
+The API will be available at `https://<your-hostname>.ts.net:10000`. The container has a built-in healthcheck; verify it with:
+```bash
+docker inspect --format '{{.State.Health.Status}}' $(docker compose ps -q app)
+```
+
+### Frontend (Vercel)
+
+Set `NEXT_PUBLIC_API_URL` to your backend URL (e.g. the Funnel URL above) in the Vercel project settings before building. Both the API base URL and the Content Security Policy's `connect-src` allowlist are baked in at build time, so changing the backend URL requires a redeploy.
 
 ## Database Schema
 
