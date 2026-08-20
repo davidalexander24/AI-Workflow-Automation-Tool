@@ -14,7 +14,7 @@ import { UpdateWorkflowDto } from './dto/update-workflow.dto';
 
 const VARIABLE_TOKEN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 
-type ModelProvider = 'google' | 'github' | 'groq' | 'cerebras' | 'openrouter';
+type ModelProvider = 'google' | 'groq' | 'openrouter';
 
 interface OpenAICompatProvider {
   baseUrl: string;
@@ -26,20 +26,10 @@ const OPENAI_COMPAT_PROVIDERS: Record<
   Exclude<ModelProvider, 'google'>,
   OpenAICompatProvider
 > = {
-  github: {
-    baseUrl: 'https://models.github.ai/inference/chat/completions',
-    apiKeyEnv: 'GITHUB_MODELS_TOKEN',
-    label: 'GitHub Models',
-  },
   groq: {
     baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
     apiKeyEnv: 'GROQ_API_KEY',
     label: 'Groq',
-  },
-  cerebras: {
-    baseUrl: 'https://api.cerebras.ai/v1/chat/completions',
-    apiKeyEnv: 'CEREBRAS_API_KEY',
-    label: 'Cerebras',
   },
   openrouter: {
     baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
@@ -48,34 +38,38 @@ const OPENAI_COMPAT_PROVIDERS: Record<
   },
 };
 
+// Only models that are actually reachable on a free-tier key belong here.
+// Verified against each provider's catalogue and a live completion.
 const MODEL_REGISTRY: Record<string, ModelProvider> = {
-  'gemini-3.1-flash-lite': 'google',
+  'gemini-3.7-flash': 'google',
+  'gemini-3.6-flash': 'google',
   'gemini-3.5-flash': 'google',
-  'gemini-3-flash-preview': 'google',
+  'gemini-3.5-flash-lite': 'google',
+  'gemini-3.1-flash-lite': 'google',
   'gemini-2.5-flash': 'google',
   'gemini-2.5-flash-lite': 'google',
-  'openai/gpt-5': 'github',
-  'openai/gpt-4o': 'github',
-  'openai/gpt-4.1-mini': 'github',
-  'deepseek/deepseek-r1': 'github',
-  'moonshotai/kimi-k2.6:free': 'openrouter',
-  'llama-3.3-70b-versatile': 'groq',
-  'llama-3.1-8b-instant': 'groq',
-  'qwen/qwen3-32b': 'groq',
-  'gpt-oss-120b': 'cerebras',
-  'zai-glm-4.7': 'cerebras',
+  'openai/gpt-oss-120b': 'groq',
+  'openai/gpt-oss-20b': 'groq',
+  'qwen/qwen3.6-27b': 'groq',
+  'groq/compound': 'groq',
+  'groq/compound-mini': 'groq',
+  'nvidia/nemotron-3-ultra-550b-a55b:free': 'openrouter',
+  'nvidia/nemotron-3-super-120b-a12b:free': 'openrouter',
+  'cohere/north-mini-code:free': 'openrouter',
 };
 
-// Some models (GPT-5 / o-series via GitHub Models) reject a custom temperature
-// and only accept the provider default. Omit the field for these.
-const NO_TEMPERATURE_MODELS = new Set<string>([
-  'openai/gpt-5',
-  'openai/gpt-5-mini',
-  'openai/gpt-5-nano',
-  'openai/o1',
-  'openai/o3',
-  'openai/o3-mini',
-  'openai/o4-mini',
+// Some models (e.g. OpenAI's o-series) reject a custom temperature and only
+// accept the provider default. Omit the field for these; runs against them are
+// recorded with a null temperature. Empty while no such model is registered.
+const NO_TEMPERATURE_MODELS = new Set<string>([]);
+
+// Groq streams a reasoning model's chain-of-thought into `content` unless it is
+// told to hide it, which would otherwise leak <think> blocks into the output.
+// The compound agents reject the field outright, so it is opt-in per model.
+const GROQ_HIDDEN_REASONING_MODELS = new Set<string>([
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'qwen/qwen3.6-27b',
 ]);
 
 const SUPPORTED_MODELS = Object.keys(MODEL_REGISTRY);
@@ -218,11 +212,12 @@ export class WorkflowsService {
   }
 
   private async generateViaOpenAICompatible(
-    provider: OpenAICompatProvider,
+    providerId: Exclude<ModelProvider, 'google'>,
     model: string,
     prompt: string,
     temperature: number,
   ): Promise<string> {
+    const provider = OPENAI_COMPAT_PROVIDERS[providerId];
     const apiKey = process.env[provider.apiKeyEnv] as string;
 
     const payload: Record<string, unknown> = {
@@ -231,6 +226,9 @@ export class WorkflowsService {
     };
     if (!NO_TEMPERATURE_MODELS.has(model)) {
       payload.temperature = temperature;
+    }
+    if (providerId === 'groq' && GROQ_HIDDEN_REASONING_MODELS.has(model)) {
+      payload.reasoning_format = 'hidden';
     }
 
     const res = await fetch(provider.baseUrl, {
@@ -455,7 +453,7 @@ export class WorkflowsService {
         provider === 'google'
           ? await this.generateViaGoogle(modelName, prompt, temperature)
           : await this.generateViaOpenAICompatible(
-              OPENAI_COMPAT_PROVIDERS[provider],
+              provider,
               modelName,
               prompt,
               temperature,

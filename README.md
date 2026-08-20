@@ -30,7 +30,7 @@ The architecture strictly separates the frontend presentation layer from the sec
 * **Framework:** NestJS
 * **Database:** PostgreSQL (hosted on Supabase)
 * **ORM:** Prisma
-* **AI Integration:** Multi-provider routing. Google Gemini via the Google Generative AI SDK (default), plus any OpenAI-compatible provider, GitHub Models, Groq, Cerebras, and OpenRouter.
+* **AI Integration:** Multi-provider routing. Google Gemini via the Google Generative AI SDK (default), plus any OpenAI-compatible provider, Groq, and OpenRouter.
 * **Deployment:** Self-hosted (Docker + Tailscale Funnel)
 
 ### Supported Models
@@ -39,19 +39,17 @@ Models are grouped in the UI by their maker. Each is routed to the appropriate p
 
 | Maker | Models | Provider |
 | :--- | :--- | :--- |
-| **Google** | Gemini 3.1 Flash Lite (default), 3.5 Flash, 3 Flash, 2.5 Flash, 2.5 Flash Lite | Google AI Studio |
-| **OpenAI** | GPT-5, GPT-4o, GPT-4.1 Mini | GitHub Models |
-| **OpenAI** | GPT-OSS 120B | Cerebras |
-| **Meta** | Llama 3.3 70B, Llama 3.1 8B | Groq |
-| **DeepSeek** | DeepSeek R1 | GitHub Models |
-| **Alibaba** | Qwen3 32B | Groq |
-| **Moonshot** | Kimi K2.6 | OpenRouter |
-| **Z.ai** | GLM 4.7 | Cerebras |
+| **Google** | Gemini 3.7 Flash, 3.6 Flash, 3.5 Flash, 3.5 Flash Lite, 3.1 Flash Lite (default), 2.5 Flash, 2.5 Flash Lite | Google AI Studio |
+| **OpenAI** | GPT-OSS 120B, GPT-OSS 20B | Groq |
+| **Alibaba** | Qwen3.6 27B | Groq |
+| **Groq** | Compound, Compound Mini | Groq |
+| **NVIDIA** | Nemotron 3 Ultra 550B, Nemotron 3 Super 120B | OpenRouter |
+| **Cohere** | North Mini Code | OpenRouter |
 
 ## Key Features
 
 * **Dynamic Prompt Templates:** Create reusable prompts with named `{{variable}}` tokens. The run page detects them and renders one labelled input per variable (falling back to a single text/JSON field for the legacy `{{input}}` convention).
-* **Multi-Provider Model Selection:** Pick any model from a maker-grouped dropdown and adjust temperature per run. The backend routes each request to the correct provider (Google, GitHub Models, Groq, Cerebras, OpenRouter) and records the model and temperature used. Models that ignore custom temperature (e.g. GPT-5) are handled automatically.
+* **Multi-Provider Model Selection:** Pick any model from a maker-grouped dropdown and adjust temperature per run. The backend routes each request to the correct provider (Google, Groq, OpenRouter) and records the model and temperature used. Models that ignore a custom temperature are handled automatically, and reasoning models are asked to keep their chain-of-thought out of the output.
 * **Workflow Management:** Full create, edit, and delete for workflows, plus client-side search across the library.
 * **Secure AI Orchestration:** The backend acts as a secure proxy, isolating every provider API key and normalizing upstream errors. Full provider error detail is logged server-side only; clients and run history get a generic message (provider `429 Too Many Requests` keeps its status so the UI can surface rate limiting).
 * **Execution History:** Every run is logged with its status (pending, success, failed), timestamp, model, and temperature. Runs can be re-run with their original input and their output copied or downloaded as Markdown.
@@ -77,9 +75,7 @@ Create a `.env` file in the `backend` directory. Only `DATABASE_URL` and at leas
 DATABASE_URL="your_supabase_connection_string"
 GEMINI_API_KEY="your_gemini_api_key"
 # Optional provider keys (omit any you don't use)
-GITHUB_MODELS_TOKEN="your_github_pat_with_models_read_scope"
 GROQ_API_KEY="your_groq_api_key"
-CEREBRAS_API_KEY="your_cerebras_api_key"
 OPENROUTER_API_KEY="your_openrouter_api_key"
 PORT=3000
 ```
