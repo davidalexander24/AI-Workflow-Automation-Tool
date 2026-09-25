@@ -13,10 +13,32 @@ const sourceCodePro = Source_Code_Pro({
   subsets: ["latin"],
 });
 
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  "https://ai-workflow-automation-tool-production.vercel.app";
+
+const DESCRIPTION =
+  "Define prompt blueprints, run them with structured input, and inspect every execution.";
+
+// Open Graph and Twitter tags give the link a preview card when it is shared
+// on LinkedIn or in chat. The image comes from app/opengraph-image.tsx.
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "AI/WFA:~$ workflow runner",
-  description:
-    "Define prompt blueprints, run them with structured input, and inspect every execution.",
+  description: DESCRIPTION,
+  openGraph: {
+    type: "website",
+    url: "/",
+    siteName: "AI Workflow Automation Tool",
+    title: "AI Workflow Automation Tool",
+    description:
+      "Reusable prompt templates, run on demand across Google, OpenAI, Alibaba, NVIDIA and Cohere models, with every run logged.",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "AI Workflow Automation Tool",
+    description: DESCRIPTION,
+  },
 };
 
 const themePrePaintScript = `(function(){try{var t=localStorage.getItem('wfa-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}else{document.documentElement.setAttribute('data-theme','dark');}}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();`;
