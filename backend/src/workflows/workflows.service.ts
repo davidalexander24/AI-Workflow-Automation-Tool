@@ -41,18 +41,15 @@ const OPENAI_COMPAT_PROVIDERS: Record<
 // Only models that are actually reachable on a free-tier key belong here.
 // Verified against each provider's catalogue and a live completion.
 const MODEL_REGISTRY: Record<string, ModelProvider> = {
+  'gemini-3.8-flash': 'google',
   'gemini-3.7-flash': 'google',
   'gemini-3.6-flash': 'google',
   'gemini-3.5-flash': 'google',
   'gemini-3.5-flash-lite': 'google',
   'gemini-3.1-flash-lite': 'google',
-  'gemini-2.5-flash': 'google',
-  'gemini-2.5-flash-lite': 'google',
   'openai/gpt-oss-120b': 'groq',
   'openai/gpt-oss-20b': 'groq',
-  'qwen/qwen3.6-27b': 'groq',
-  'groq/compound': 'groq',
-  'groq/compound-mini': 'groq',
+  'qwen/qwen3.8-27b': 'groq',
   'nvidia/nemotron-3-ultra-550b-a55b:free': 'openrouter',
   'nvidia/nemotron-3-super-120b-a12b:free': 'openrouter',
   'cohere/north-mini-code:free': 'openrouter',
@@ -65,16 +62,16 @@ const NO_TEMPERATURE_MODELS = new Set<string>([]);
 
 // Groq streams a reasoning model's chain-of-thought into `content` unless it is
 // told to hide it, which would otherwise leak <think> blocks into the output.
-// The compound agents reject the field outright, so it is opt-in per model.
+// Non-reasoning models reject the field outright, so it is opt-in per model.
 const GROQ_HIDDEN_REASONING_MODELS = new Set<string>([
   'openai/gpt-oss-120b',
   'openai/gpt-oss-20b',
-  'qwen/qwen3.6-27b',
+  'qwen/qwen3.8-27b',
 ]);
 
 const SUPPORTED_MODELS = Object.keys(MODEL_REGISTRY);
 
-const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
+const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 // A hung provider would otherwise hold the request open and leave the run
 // pending indefinitely.
 const PROVIDER_TIMEOUT_MS = 60_000;

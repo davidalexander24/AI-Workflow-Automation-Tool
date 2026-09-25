@@ -77,16 +77,15 @@ export type ExecuteWorkflowResponse = {
 };
 
 export const MODELS = [
+  { id: 'gemini-3.8-flash', label: 'gemini-3.8-flash', maker: 'Google' },
   { id: 'gemini-3.7-flash', label: 'gemini-3.7-flash', maker: 'Google' },
   { id: 'gemini-3.6-flash', label: 'gemini-3.6-flash', maker: 'Google' },
   { id: 'gemini-3.5-flash', label: 'gemini-3.5-flash', maker: 'Google' },
   { id: 'gemini-3.5-flash-lite', label: 'gemini-3.5-flash-lite', maker: 'Google' },
   { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite', maker: 'Google' },
-  { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash', maker: 'Google' },
-  { id: 'gemini-2.5-flash-lite', label: 'gemini-2.5-flash-lite', maker: 'Google' },
   { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b', maker: 'OpenAI' },
   { id: 'openai/gpt-oss-20b', label: 'gpt-oss-20b', maker: 'OpenAI' },
-  { id: 'qwen/qwen3.6-27b', label: 'qwen3.6-27b', maker: 'Alibaba' },
+  { id: 'qwen/qwen3.8-27b', label: 'qwen3.8-27b', maker: 'Alibaba' },
   {
     id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
     label: 'nemotron-3-ultra-550b',
@@ -98,13 +97,11 @@ export const MODELS = [
     maker: 'NVIDIA',
   },
   { id: 'cohere/north-mini-code:free', label: 'north-mini-code', maker: 'Cohere' },
-  { id: 'groq/compound', label: 'compound', maker: 'Groq' },
-  { id: 'groq/compound-mini', label: 'compound-mini', maker: 'Groq' },
 ] as const;
 
 export type ModelId = (typeof MODELS)[number]['id'];
 
-export const DEFAULT_MODEL: ModelId = 'gemini-3.1-flash-lite';
+export const DEFAULT_MODEL: ModelId = 'gemini-3.5-flash-lite';
 export const DEFAULT_TEMPERATURE = 1;
 export const MIN_TEMPERATURE = 0;
 export const MAX_TEMPERATURE = 2;

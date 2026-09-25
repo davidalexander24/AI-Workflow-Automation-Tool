@@ -39,10 +39,9 @@ Models are grouped in the UI by their maker. Each is routed to the appropriate p
 
 | Maker | Models | Provider |
 | :--- | :--- | :--- |
-| **Google** | Gemini 3.7 Flash, 3.6 Flash, 3.5 Flash, 3.5 Flash Lite, 3.1 Flash Lite (default), 2.5 Flash, 2.5 Flash Lite | Google AI Studio |
+| **Google** | Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash, 3.5 Flash, 3.5 Flash Lite (default), 3.1 Flash Lite | Google AI Studio |
 | **OpenAI** | GPT-OSS 120B, GPT-OSS 20B | Groq |
-| **Alibaba** | Qwen3.6 27B | Groq |
-| **Groq** | Compound, Compound Mini | Groq |
+| **Alibaba** | Qwen3.8 27B | Groq |
 | **NVIDIA** | Nemotron 3 Ultra 550B, Nemotron 3 Super 120B | OpenRouter |
 | **Cohere** | North Mini Code | OpenRouter |
 
