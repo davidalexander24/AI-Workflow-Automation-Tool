@@ -1,0 +1,30 @@
+name: Uptime
+
+# Pings the public API every six hours. /health runs a database query, so this
+# also keeps the free-tier Supabase project from pausing after a week without
+# traffic. A failed run makes GitHub send the usual workflow-failure email.
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check backend health
+        env:
+          HEALTH_URL: https://david-srvr.ostrich-hoki.ts.net:10000/health
+        run: |
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error --max-time 30 "$HEALTH_URL"; then
+              echo
+              exit 0
+            fi
+            echo "attempt $attempt failed; retrying in 60s"
+            sleep 60
+          done
+          echo "::error::$HEALTH_URL did not return 200 after 3 attempts"
+          exit 1
