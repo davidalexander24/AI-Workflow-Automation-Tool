@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CreateWorkflowPayload,
   UpdateWorkflowPayload,
@@ -10,6 +10,7 @@ import {
 } from '../lib/api';
 import { workflowExamples } from '../lib/examples';
 import { extractVariables } from '../lib/template';
+import { useDialogFocus } from '../ui/use-dialog-focus';
 
 const initialFormState: CreateWorkflowPayload = {
   name: '',
@@ -54,6 +55,11 @@ export default function WorkflowsPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  const formDialogRef = useRef<HTMLDivElement | null>(null);
+  const deleteDialogRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocus(formDialogRef, dialog?.kind === 'create' || dialog?.kind === 'edit');
+  useDialogFocus(deleteDialogRef, dialog?.kind === 'delete');
 
   const filteredWorkflows = useMemo(() => {
     if (!search.trim()) return workflows;
@@ -253,6 +259,7 @@ export default function WorkflowsPage() {
           </span>
           <input
             type="text"
+            aria-label="Search workflows"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="search workflows..."
@@ -388,14 +395,21 @@ export default function WorkflowsPage() {
         <div
           role="dialog"
           aria-modal="true"
+          aria-labelledby="workflow-dialog-title"
           className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-bg/95 px-4 py-10"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeDialog();
           }}
         >
-          <div className="w-full max-w-2xl border border-rule-strong bg-bg-elev shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
+          <div
+            ref={formDialogRef}
+            className="w-full max-w-2xl border border-rule-strong bg-bg-elev shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
+          >
             <div className="flex items-center justify-between border-b border-rule px-5 py-3">
-              <p className="font-mono text-xs tracking-wide text-ink-muted">
+              <p
+                id="workflow-dialog-title"
+                className="font-mono text-xs tracking-wide text-ink-muted"
+              >
                 <span className="text-accent">{'>'}</span>{' '}
                 {dialog.kind === 'create' ? 'NEW WORKFLOW' : 'EDIT WORKFLOW'}
               </p>
@@ -431,11 +445,17 @@ export default function WorkflowsPage() {
               ) : null}
 
               <div>
-                <label className="block font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                <label
+                  htmlFor="workflow-name"
+                  className="block font-mono text-[10px] uppercase tracking-wider text-ink-faint"
+                >
                   name
                 </label>
                 <input
+                  id="workflow-name"
+                  data-autofocus
                   required
+                  maxLength={200}
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   placeholder="Lead Qualifier"
@@ -444,11 +464,16 @@ export default function WorkflowsPage() {
               </div>
 
               <div>
-                <label className="block font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                <label
+                  htmlFor="workflow-description"
+                  className="block font-mono text-[10px] uppercase tracking-wider text-ink-faint"
+                >
                   description
                 </label>
                 <input
+                  id="workflow-description"
                   required
+                  maxLength={2000}
                   value={form.description}
                   onChange={(e) =>
                     setForm({ ...form, description: e.target.value })
@@ -459,7 +484,10 @@ export default function WorkflowsPage() {
               </div>
 
               <div>
-                <label className="flex items-baseline justify-between font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                <label
+                  htmlFor="workflow-template"
+                  className="flex items-baseline justify-between font-mono text-[10px] uppercase tracking-wider text-ink-faint"
+                >
                   <span>prompt template</span>
                   <span>
                     use{' '}
@@ -467,7 +495,9 @@ export default function WorkflowsPage() {
                   </span>
                 </label>
                 <textarea
+                  id="workflow-template"
                   required
+                  maxLength={20000}
                   rows={8}
                   value={form.promptTemplate}
                   onChange={(e) =>
@@ -527,15 +557,20 @@ export default function WorkflowsPage() {
       {/* Delete confirm */}
       {dialog && dialog.kind === 'delete' ? (
         <div
-          role="dialog"
+          role="alertdialog"
           aria-modal="true"
+          aria-labelledby="delete-dialog-title"
+          aria-describedby="delete-dialog-description"
           className="fixed inset-0 z-40 flex items-center justify-center bg-bg/95 px-4"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeDialog();
           }}
         >
-          <div className="w-full max-w-md border border-fail/40 bg-bg-elev">
-            <div className="border-b border-rule px-5 py-3 font-mono text-xs text-fail">
+          <div ref={deleteDialogRef} className="w-full max-w-md border border-fail/40 bg-bg-elev">
+            <div
+              id="delete-dialog-title"
+              className="border-b border-rule px-5 py-3 font-mono text-xs text-fail"
+            >
               {'>'} CONFIRM DELETE
             </div>
             <div className="space-y-3 px-5 py-5">
@@ -546,7 +581,7 @@ export default function WorkflowsPage() {
                 </span>
                 ?
               </p>
-              <p className="font-sans text-xs text-ink-muted">
+              <p id="delete-dialog-description" className="font-sans text-xs text-ink-muted">
                 This also removes every run logged for this workflow. The
                 action cannot be undone.
               </p>
@@ -558,6 +593,7 @@ export default function WorkflowsPage() {
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
+                  data-autofocus
                   onClick={closeDialog}
                   className="border border-rule px-3 py-1.5 font-mono text-xs text-ink-muted hover:border-rule-strong hover:text-ink"
                 >
