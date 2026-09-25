@@ -13,13 +13,13 @@ import {
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
-  DEFAULT_MODEL,
   DEFAULT_TEMPERATURE,
   ExecuteWorkflowResponse,
-  MODELS,
   MAX_TEMPERATURE,
   MIN_TEMPERATURE,
-  ModelId,
+  ModelInfo,
+  ModelStats,
+  ModelsResponse,
   Workflow,
   WorkflowRun,
   requestJson,
@@ -97,14 +97,29 @@ function shortModelName(id: string): string {
   return last.replace(/:free$/, '').replace(/^gemini-/, '');
 }
 
-function formatModelTag(
-  model?: string | null,
-  temperature?: number | null,
-): string | null {
-  if (!model) return null;
-  const short = shortModelName(model);
-  return temperature == null ? short : `${short} · t${temperature.toFixed(1)}`;
+function formatModelTag(run: WorkflowRun): string | null {
+  if (!run.model) return null;
+  const parts = [shortModelName(run.model)];
+  if (run.temperature != null) parts.push(`t${run.temperature.toFixed(1)}`);
+  if (run.latencyMs != null) parts.push(formatDuration(run.latencyMs));
+  if (run.fallbackFrom) parts.push(`fallback from ${shortModelName(run.fallbackFrom)}`);
+  return parts.join(' · ');
 }
+
+function formatTokens(prompt?: number | null, completion?: number | null): string | null {
+  if (prompt == null && completion == null) return null;
+  return `${prompt ?? '?'} in / ${completion ?? '?'} out tok`;
+}
+
+type ResultMeta = {
+  model: string;
+  fallbackFrom: string | null;
+  temperature: number | null;
+  latencyMs: number | null;
+  attempts: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+};
 
 function formatRunInput(input: unknown): string {
   if (input === null || input === undefined) return '';
@@ -129,8 +144,11 @@ export default function ExecuteWorkflowPage() {
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
 
   // model config
-  const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [model, setModel] = useState<string>('');
   const [temperature, setTemperature] = useState<number>(DEFAULT_TEMPERATURE);
+  const [allowFallback, setAllowFallback] = useState(true);
 
   // run state
   const [isRunning, setIsRunning] = useState(false);
@@ -139,10 +157,11 @@ export default function ExecuteWorkflowPage() {
   const [resultStatus, setResultStatus] = useState<'pending' | 'success' | 'failed' | null>(null);
   const [resultDuration, setResultDuration] = useState<number | null>(null);
   const [completedAt, setCompletedAt] = useState<string | null>(null);
-  const [resultMeta, setResultMeta] = useState<{ model: string; temperature: number } | null>(null);
+  const [resultMeta, setResultMeta] = useState<ResultMeta | null>(null);
 
   // history state
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [stats, setStats] = useState<ModelStats[]>([]);
   const [isLoadingRuns, setIsLoadingRuns] = useState(true);
   const [runsError, setRunsError] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -158,6 +177,11 @@ export default function ExecuteWorkflowPage() {
     () => (workflow ? shouldUseSingleInput(workflow.promptTemplate) : true),
     [workflow],
   );
+  // A template with no {{variables}} runs as-is; asking for input would only
+  // collect text the backend throws away.
+  const needsNoInput = workflow !== null && variables.length === 0;
+
+  const makers = useMemo(() => [...new Set(models.map((m) => m.maker))], [models]);
 
   const activeRun = useMemo(
     () => runs.find((r) => r.id === activeRunId) ?? null,
@@ -183,10 +207,12 @@ export default function ExecuteWorkflowPage() {
       if (showLoader) setIsLoadingRuns(true);
       setRunsError(null);
       try {
-        const history = await requestJson<WorkflowRun[]>(
-          `/workflows/${workflowId}/runs`,
-        );
+        const [history, modelStats] = await Promise.all([
+          requestJson<WorkflowRun[]>(`/workflows/${workflowId}/runs`),
+          requestJson<ModelStats[]>(`/workflows/${workflowId}/stats`),
+        ]);
         setRuns(history);
+        setStats(modelStats);
       } catch (error) {
         setRunsError(extractErrorMessage(error, 'Unable to load run history.'));
       } finally {
@@ -195,6 +221,29 @@ export default function ExecuteWorkflowPage() {
     },
     [workflowId],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadModels(): Promise<void> {
+      try {
+        const response = await requestJson<ModelsResponse>('/models');
+        if (cancelled) return;
+        setModels(response.models);
+        setModel(response.defaultModel ?? response.models[0]?.id ?? '');
+        setModelsError(
+          response.models.length === 0 ? 'No AI provider is configured on the server.' : null,
+        );
+      } catch (error) {
+        if (!cancelled) {
+          setModelsError(extractErrorMessage(error, 'Unable to load the model list.'));
+        }
+      }
+    }
+    void loadModels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!workflowId) return;
@@ -239,8 +288,15 @@ export default function ExecuteWorkflowPage() {
   async function executeRun(): Promise<void> {
     if (!workflowId || isRunning) return;
 
+    if (!model) {
+      setRunError(modelsError ?? 'The model list has not loaded yet.');
+      return;
+    }
+
     let payload: unknown;
-    if (useSingleInput) {
+    if (needsNoInput) {
+      payload = '';
+    } else if (useSingleInput) {
       const trimmed = singleInput.trim();
       if (!trimmed) {
         setRunError('Provide an input value before running.');
@@ -275,7 +331,7 @@ export default function ExecuteWorkflowPage() {
         `/workflows/${workflowId}/execute`,
         {
           method: 'POST',
-          body: JSON.stringify({ inputData: payload, model, temperature }),
+          body: JSON.stringify({ inputData: payload, model, temperature, allowFallback }),
         },
       );
       const duration = Math.round(performance.now() - startedAt);
@@ -284,8 +340,13 @@ export default function ExecuteWorkflowPage() {
       setResultDuration(duration);
       setCompletedAt(new Date().toISOString());
       setResultMeta({
-        model: response.model ?? model,
-        temperature: response.temperature ?? temperature,
+        model: response.model,
+        fallbackFrom: response.fallbackFrom,
+        temperature: response.temperature,
+        latencyMs: response.latencyMs,
+        attempts: response.attempts,
+        promptTokens: response.promptTokens,
+        completionTokens: response.completionTokens,
       });
       await loadRuns(false);
     } catch (error) {
@@ -296,7 +357,15 @@ export default function ExecuteWorkflowPage() {
       setResultStatus('failed');
       setResultDuration(duration);
       setCompletedAt(new Date().toISOString());
-      setResultMeta({ model, temperature });
+      setResultMeta({
+        model,
+        fallbackFrom: null,
+        temperature,
+        latencyMs: null,
+        attempts: null,
+        promptTokens: null,
+        completionTokens: null,
+      });
       void loadRuns(false);
     } finally {
       setIsRunning(false);
@@ -426,15 +495,23 @@ export default function ExecuteWorkflowPage() {
           </span>
         </div>
 
-        {useSingleInput ? (
+        {needsNoInput ? (
+          <p className="border border-dashed border-rule px-4 py-4 font-mono text-xs text-ink-muted">
+            this template has no {'{{variables}}'}. it runs exactly as written.
+          </p>
+        ) : useSingleInput ? (
           <div>
-            <label className="block font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+            <label
+              htmlFor="run-input"
+              className="block font-mono text-[10px] uppercase tracking-wider text-ink-faint"
+            >
               {variables[0] ?? 'inputData'}
               <span className="ml-2 normal-case tracking-normal text-ink-faint">
                 - plain text or JSON
               </span>
             </label>
             <textarea
+              id="run-input"
               ref={textareaRef}
               required
               rows={10}
@@ -449,7 +526,10 @@ export default function ExecuteWorkflowPage() {
           <div className="space-y-4">
             {variables.map((v) => (
               <div key={v}>
-                <label className="block font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                <label
+                  htmlFor={`var-${v}`}
+                  className="block font-mono text-[10px] uppercase tracking-wider text-ink-faint"
+                >
                   {`{{${v}}}`}
                 </label>
                 {v.toLowerCase().includes('document') ||
@@ -457,6 +537,7 @@ export default function ExecuteWorkflowPage() {
                 v.toLowerCase().includes('text') ||
                 v.toLowerCase().includes('content') ? (
                   <textarea
+                    id={`var-${v}`}
                     required
                     rows={6}
                     value={variableValues[v] ?? ''}
@@ -471,6 +552,7 @@ export default function ExecuteWorkflowPage() {
                   />
                 ) : (
                   <input
+                    id={`var-${v}`}
                     required
                     type="text"
                     value={variableValues[v] ?? ''}
@@ -502,18 +584,25 @@ export default function ExecuteWorkflowPage() {
               <span className="text-ink-faint">model</span>
               <select
                 value={model}
-                onChange={(e) => setModel(e.target.value as ModelId)}
-                className="border border-rule bg-bg px-2 py-1 font-mono text-[12px] text-ink focus:border-accent focus:outline-none"
+                onChange={(e) => setModel(e.target.value)}
+                disabled={models.length === 0}
+                className="border border-rule bg-bg px-2 py-1 font-mono text-[12px] text-ink focus:border-accent focus:outline-none disabled:opacity-60"
               >
-                {[...new Set(MODELS.map((m) => m.maker))].map((maker) => (
-                  <optgroup key={maker} label={maker}>
-                    {MODELS.filter((m) => m.maker === maker).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
+                {models.length === 0 ? (
+                  <option value="">{modelsError ? 'unavailable' : 'loading…'}</option>
+                ) : (
+                  makers.map((maker) => (
+                    <optgroup key={maker} label={maker}>
+                      {models
+                        .filter((m) => m.maker === maker)
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))
+                )}
               </select>
             </label>
 
@@ -539,6 +628,27 @@ export default function ExecuteWorkflowPage() {
               </span>
             </label>
           </div>
+          <div className="border-t border-rule px-3 py-2.5">
+            <label className="flex items-start gap-2 font-mono text-[11px] text-ink-muted">
+              <input
+                type="checkbox"
+                checked={allowFallback}
+                onChange={(e) => setAllowFallback(e.target.checked)}
+                className="mt-0.5 accent-accent"
+              />
+              <span>
+                fall back to another provider if this model fails
+                <span className="block text-ink-faint">
+                  turn off when comparing models, so a failure shows as a failure
+                </span>
+              </span>
+            </label>
+          </div>
+          {modelsError ? (
+            <p className="border-t border-rule px-3 py-2 font-mono text-[11px] text-fail">
+              [ERROR] {modelsError}
+            </p>
+          ) : null}
         </div>
 
         {runError ? (
@@ -553,7 +663,7 @@ export default function ExecuteWorkflowPage() {
           </p>
           <button
             type="submit"
-            disabled={isRunning}
+            disabled={isRunning || !model}
             className="border border-accent bg-accent px-5 py-2 font-mono text-xs font-semibold tracking-wide text-accent-fg transition hover:bg-bg hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isRunning ? '[running…]' : '[▶ RUN]'}
@@ -564,15 +674,41 @@ export default function ExecuteWorkflowPage() {
       {/* Result panel */}
       <section className="border border-rule">
         <div className="flex items-center justify-between border-b border-rule bg-bg-elev px-4 py-2.5">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-mono text-xs uppercase tracking-wider text-ink-muted">
               {'// result'}
+            </span>
+            <span role="status" className="sr-only">
+              {isRunning
+                ? 'Running workflow.'
+                : resultStatus === 'success'
+                  ? `Run succeeded${resultMeta ? ` with ${shortModelName(resultMeta.model)}` : ''}.`
+                  : resultStatus === 'failed'
+                    ? `Run failed. ${runError ?? ''}`
+                    : ''}
             </span>
             {resultStatus ? <StatusTag status={resultStatus} /> : null}
             {resultMeta ? (
               <span className="font-mono text-[11px] text-ink-faint">
-                {shortModelName(resultMeta.model)} · temp{' '}
-                {resultMeta.temperature.toFixed(1)}
+                {shortModelName(resultMeta.model)}
+                {resultMeta.temperature != null
+                  ? ` · temp ${resultMeta.temperature.toFixed(1)}`
+                  : ''}
+              </span>
+            ) : null}
+            {resultMeta?.fallbackFrom ? (
+              <span className="font-mono text-[11px] text-warn">
+                fallback: {shortModelName(resultMeta.fallbackFrom)} failed
+              </span>
+            ) : null}
+            {resultMeta && formatTokens(resultMeta.promptTokens, resultMeta.completionTokens) ? (
+              <span className="font-mono text-[11px] text-ink-faint">
+                {formatTokens(resultMeta.promptTokens, resultMeta.completionTokens)}
+              </span>
+            ) : null}
+            {resultMeta?.attempts && resultMeta.attempts > 1 ? (
+              <span className="font-mono text-[11px] text-ink-faint">
+                {resultMeta.attempts} attempts
               </span>
             ) : null}
             {resultDuration !== null ? (
@@ -614,6 +750,57 @@ export default function ExecuteWorkflowPage() {
           </div>
         )}
       </section>
+
+      {/* Per-model stats */}
+      {stats.length > 0 ? (
+        <section>
+          <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule pb-2">
+            <h2 className="font-mono text-xs uppercase tracking-wider text-ink-muted">
+              {'// model stats'}
+            </h2>
+            <span className="font-mono text-[10px] text-ink-faint">
+              success = answered by the requested model, no fallback
+            </span>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[34rem] font-mono text-[11px]">
+              <caption className="sr-only">
+                Runs, success rate, latency and output length per requested model
+              </caption>
+              <thead>
+                <tr className="text-left text-ink-faint">
+                  <th scope="col" className="py-1.5 pr-3 font-normal">model</th>
+                  <th scope="col" className="py-1.5 pr-3 text-right font-normal">runs</th>
+                  <th scope="col" className="py-1.5 pr-3 text-right font-normal">success</th>
+                  <th scope="col" className="py-1.5 pr-3 text-right font-normal">fallbacks</th>
+                  <th scope="col" className="py-1.5 pr-3 text-right font-normal">p50</th>
+                  <th scope="col" className="py-1.5 pr-3 text-right font-normal">p95</th>
+                  <th scope="col" className="py-1.5 text-right font-normal">avg out tok</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-rule border-t border-rule">
+                {stats.map((s) => (
+                  <tr key={s.model} className="text-ink-muted">
+                    <td className="py-1.5 pr-3 text-ink">{shortModelName(s.model)}</td>
+                    <td className="py-1.5 pr-3 text-right">{s.runs}</td>
+                    <td className="py-1.5 pr-3 text-right">
+                      {Math.round((s.successes / s.runs) * 100)}%
+                    </td>
+                    <td className="py-1.5 pr-3 text-right">{s.fallbacks || '-'}</td>
+                    <td className="py-1.5 pr-3 text-right">
+                      {s.p50LatencyMs != null ? formatDuration(s.p50LatencyMs) : '-'}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right">
+                      {s.p95LatencyMs != null ? formatDuration(s.p95LatencyMs) : '-'}
+                    </td>
+                    <td className="py-1.5 text-right">{s.avgCompletionTokens ?? '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       {/* Run history */}
       <section>
@@ -684,7 +871,7 @@ export default function ExecuteWorkflowPage() {
                       </span>
                       {run.model ? (
                         <span className="font-mono text-[11px] text-ink-faint">
-                          · {formatModelTag(run.model, run.temperature)}
+                          · {formatModelTag(run)}
                         </span>
                       ) : null}
                     </div>
@@ -701,6 +888,7 @@ export default function ExecuteWorkflowPage() {
                       </button>
                       <button
                         type="button"
+                        aria-expanded={isOpen}
                         onClick={() =>
                           setActiveRunId((c) => (c === run.id ? null : run.id))
                         }
@@ -720,10 +908,38 @@ export default function ExecuteWorkflowPage() {
                           </span>{' '}
                           model:{' '}
                           <span className="text-ink-muted">{activeRun.model}</span>
+                          {activeRun.fallbackFrom ? (
+                            <>
+                              {' · '}requested:{' '}
+                              <span className="text-warn">{activeRun.fallbackFrom}</span>
+                            </>
+                          ) : null}
                           {' · '}temp:{' '}
                           <span className="text-ink-muted">
                             {activeRun.temperature?.toFixed(1) ?? 'n/a'}
                           </span>
+                          {activeRun.latencyMs != null ? (
+                            <>
+                              {' · '}latency:{' '}
+                              <span className="text-ink-muted">
+                                {formatDuration(activeRun.latencyMs)}
+                              </span>
+                            </>
+                          ) : null}
+                          {activeRun.attempts != null ? (
+                            <>
+                              {' · '}attempts:{' '}
+                              <span className="text-ink-muted">{activeRun.attempts}</span>
+                            </>
+                          ) : null}
+                          {formatTokens(activeRun.promptTokens, activeRun.completionTokens) ? (
+                            <>
+                              {' · '}
+                              <span className="text-ink-muted">
+                                {formatTokens(activeRun.promptTokens, activeRun.completionTokens)}
+                              </span>
+                            </>
+                          ) : null}
                         </p>
                       ) : null}
                       <div className="grid gap-4 md:grid-cols-2">

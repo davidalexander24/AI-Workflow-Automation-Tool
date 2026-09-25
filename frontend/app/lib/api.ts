@@ -1,6 +1,9 @@
 const API_BASE_URL =
   (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
 
+const OFFLINE_MESSAGE =
+  'Cannot reach the backend API right now. It is self-hosted and may be briefly offline; please try again in a minute.';
+
 function toApiUrl(path: string): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   return `${API_BASE_URL}${normalizedPath}`;
@@ -16,10 +19,16 @@ export async function requestJson<T>(
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(toApiUrl(path), {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(toApiUrl(path), {
+      ...init,
+      headers,
+    });
+  } catch {
+    // fetch only rejects when no response arrived at all (DNS, TLS, network).
+    throw new Error(OFFLINE_MESSAGE);
+  }
 
   if (!response.ok) {
     const fallbackMessage = `Request failed with status ${response.status}`;
@@ -62,8 +71,15 @@ export type WorkflowRun = {
   inputData: unknown;
   outputResult: string;
   status: 'pending' | 'success' | 'failed';
+  // The model that produced the output; fallbackFrom is the one requested
+  // when a fallback answered instead.
   model?: string | null;
+  fallbackFrom?: string | null;
   temperature?: number | null;
+  attempts?: number | null;
+  latencyMs?: number | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
   createdAt: string;
 };
 
@@ -72,36 +88,38 @@ export type ExecuteWorkflowResponse = {
   runId: string;
   status: 'pending' | 'success' | 'failed';
   outputResult: string;
-  model?: string;
-  temperature?: number;
+  model: string;
+  fallbackFrom: string | null;
+  temperature: number | null;
+  attempts: number;
+  latencyMs: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
 };
 
-export const MODELS = [
-  { id: 'gemini-3.8-flash', label: 'gemini-3.8-flash', maker: 'Google' },
-  { id: 'gemini-3.7-flash', label: 'gemini-3.7-flash', maker: 'Google' },
-  { id: 'gemini-3.6-flash', label: 'gemini-3.6-flash', maker: 'Google' },
-  { id: 'gemini-3.5-flash', label: 'gemini-3.5-flash', maker: 'Google' },
-  { id: 'gemini-3.5-flash-lite', label: 'gemini-3.5-flash-lite', maker: 'Google' },
-  { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite', maker: 'Google' },
-  { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b', maker: 'OpenAI' },
-  { id: 'openai/gpt-oss-20b', label: 'gpt-oss-20b', maker: 'OpenAI' },
-  { id: 'qwen/qwen3.8-27b', label: 'qwen3.8-27b', maker: 'Alibaba' },
-  {
-    id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
-    label: 'nemotron-3-ultra-550b',
-    maker: 'NVIDIA',
-  },
-  {
-    id: 'nvidia/nemotron-3-super-120b-a12b:free',
-    label: 'nemotron-3-super-120b',
-    maker: 'NVIDIA',
-  },
-  { id: 'cohere/north-mini-code:free', label: 'north-mini-code', maker: 'Cohere' },
-] as const;
+export type ModelInfo = {
+  id: string;
+  label: string;
+  maker: string;
+  provider: string;
+};
 
-export type ModelId = (typeof MODELS)[number]['id'];
+// Served by the backend, which lists only models it holds a provider key for.
+export type ModelsResponse = {
+  defaultModel: string | null;
+  models: ModelInfo[];
+};
 
-export const DEFAULT_MODEL: ModelId = 'gemini-3.5-flash-lite';
+export type ModelStats = {
+  model: string;
+  runs: number;
+  successes: number;
+  fallbacks: number;
+  p50LatencyMs: number | null;
+  p95LatencyMs: number | null;
+  avgCompletionTokens: number | null;
+};
+
 export const DEFAULT_TEMPERATURE = 1;
 export const MIN_TEMPERATURE = 0;
 export const MAX_TEMPERATURE = 2;
