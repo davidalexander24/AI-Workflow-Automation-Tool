@@ -51,6 +51,11 @@ export class WorkflowsController {
     return this.workflowsService.getWorkflowRuns(workflowId);
   }
 
+  @Get(':id/stats')
+  getWorkflowStats(@Param('id', ParseUUIDPipe) workflowId: string) {
+    return this.workflowsService.getWorkflowStats(workflowId);
+  }
+
   // Tighter than the global limit: this is the only route that consumes
   // AI provider quota.
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
@@ -62,6 +67,7 @@ export class WorkflowsController {
     return this.workflowsService.executeWorkflow(workflowId, body.inputData, {
       model: body.model,
       temperature: body.temperature,
+      allowFallback: body.allowFallback,
     });
   }
 }

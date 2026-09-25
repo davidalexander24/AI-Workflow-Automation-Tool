@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDefined,
   IsNumber,
   IsOptional,
@@ -25,4 +26,10 @@ export class ExecuteWorkflowDto {
   @Min(0)
   @Max(2)
   temperature?: number;
+
+  // Defaults to true. Turn it off when comparing models, so a failing model
+  // reports its failure instead of being answered by a substitute.
+  @IsOptional()
+  @IsBoolean()
+  allowFallback?: boolean;
 }

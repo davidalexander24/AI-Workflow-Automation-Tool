@@ -3,78 +3,27 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import {
+  GenerationError,
+  LlmService,
+  describeError,
+  statusOf,
+} from '../llm/llm.service';
+import {
+  ModelDefinition,
+  availableModels,
+  defaultModel,
+  findModel,
+  isProviderConfigured,
+} from '../llm/model-registry';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
+import { applyTemplate } from './template';
 
-const VARIABLE_TOKEN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
-
-type ModelProvider = 'google' | 'groq' | 'openrouter';
-
-interface OpenAICompatProvider {
-  baseUrl: string;
-  apiKeyEnv: string;
-  label: string;
-}
-
-const OPENAI_COMPAT_PROVIDERS: Record<
-  Exclude<ModelProvider, 'google'>,
-  OpenAICompatProvider
-> = {
-  groq: {
-    baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
-    apiKeyEnv: 'GROQ_API_KEY',
-    label: 'Groq',
-  },
-  openrouter: {
-    baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
-    apiKeyEnv: 'OPENROUTER_API_KEY',
-    label: 'OpenRouter',
-  },
-};
-
-// Only models that are actually reachable on a free-tier key belong here.
-// Verified against each provider's catalogue and a live completion.
-const MODEL_REGISTRY: Record<string, ModelProvider> = {
-  'gemini-3.8-flash': 'google',
-  'gemini-3.7-flash': 'google',
-  'gemini-3.6-flash': 'google',
-  'gemini-3.5-flash': 'google',
-  'gemini-3.5-flash-lite': 'google',
-  'gemini-3.1-flash-lite': 'google',
-  'openai/gpt-oss-120b': 'groq',
-  'openai/gpt-oss-20b': 'groq',
-  'qwen/qwen3.8-27b': 'groq',
-  'nvidia/nemotron-3-ultra-550b-a55b:free': 'openrouter',
-  'nvidia/nemotron-3-super-120b-a12b:free': 'openrouter',
-  'cohere/north-mini-code:free': 'openrouter',
-};
-
-// Some models (e.g. OpenAI's o-series) reject a custom temperature and only
-// accept the provider default. Omit the field for these; runs against them are
-// recorded with a null temperature. Empty while no such model is registered.
-const NO_TEMPERATURE_MODELS = new Set<string>([]);
-
-// Groq streams a reasoning model's chain-of-thought into `content` unless it is
-// told to hide it, which would otherwise leak <think> blocks into the output.
-// Non-reasoning models reject the field outright, so it is opt-in per model.
-const GROQ_HIDDEN_REASONING_MODELS = new Set<string>([
-  'openai/gpt-oss-120b',
-  'openai/gpt-oss-20b',
-  'qwen/qwen3.8-27b',
-]);
-
-const SUPPORTED_MODELS = Object.keys(MODEL_REGISTRY);
-
-const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
-// A hung provider would otherwise hold the request open and leave the run
-// pending indefinitely.
-const PROVIDER_TIMEOUT_MS = 60_000;
 const DEFAULT_TEMPERATURE = 1;
 const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
@@ -82,67 +31,80 @@ const MAX_TEMPERATURE = 2;
 export type ExecuteOptions = {
   model?: string;
   temperature?: number;
+  allowFallback?: boolean;
 };
 
-function applyTemplate(template: string, input: unknown): string {
-  if (input === null || input === undefined) {
-    return template;
+export type ModelStats = {
+  model: string;
+  runs: number;
+  successes: number;
+  fallbacks: number;
+  p50LatencyMs: number | null;
+  p95LatencyMs: number | null;
+  avgCompletionTokens: number | null;
+};
+
+// Provider error text can include internal URLs, model details, or other
+// upstream internals; clients only get a generic message. 429 keeps its
+// status so the UI can surface rate limiting.
+function toSafeExecutionError(error: unknown): {
+  message: string;
+  status: number;
+} {
+  if (statusOf(error) === 429) {
+    return {
+      message:
+        'The AI provider rate-limited this request. Please try again shortly.',
+      status: HttpStatus.TOO_MANY_REQUESTS,
+    };
   }
 
-  if (typeof input === 'string') {
-    return template.replace(/\{\{\s*input\s*\}\}/g, input);
-  }
+  return {
+    message: 'Workflow execution failed due to an upstream AI provider error.',
+    status: HttpStatus.BAD_GATEWAY,
+  };
+}
 
-  if (typeof input === 'object' && !Array.isArray(input)) {
-    return template.replace(VARIABLE_TOKEN, (_, name: string) => {
-      const value = (input as Record<string, unknown>)[name];
-      if (value === undefined || value === null) {
-        return '';
-      }
-      return typeof value === 'string' ? value : JSON.stringify(value);
-    });
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
   }
-
-  return template.replace(/\{\{\s*input\s*\}\}/g, JSON.stringify(input));
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : null;
 }
 
 @Injectable()
 export class WorkflowsService {
   private readonly logger = new Logger(WorkflowsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly llm: LlmService,
+  ) {}
 
-  private extractProviderErrorMessage(error: unknown): string {
-    if (error instanceof Error && error.message) {
-      return error.message;
-    }
-
-    if (typeof error === 'string' && error.trim()) {
-      return error;
-    }
-
-    if (error && typeof error === 'object') {
-      const candidate = (error as { message?: unknown }).message;
-      if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate;
-      }
-    }
-
-    return 'Workflow execution failed due to an upstream AI provider error.';
-  }
-
-  private resolveModel(model?: string): string {
+  private resolveModel(model?: string): ModelDefinition {
     if (model === undefined || model === null || model === '') {
-      return DEFAULT_MODEL;
+      const fallback = defaultModel();
+      if (!fallback) {
+        throw new HttpException(
+          'No AI provider is configured on this server.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      return fallback;
     }
 
-    if (!(model in MODEL_REGISTRY)) {
+    const definition = findModel(model);
+    if (!definition || !isProviderConfigured(definition.provider)) {
+      const supported = availableModels()
+        .map((m) => m.id)
+        .join(', ');
       throw new BadRequestException(
-        `Unsupported model "${model}". Supported models: ${SUPPORTED_MODELS.join(', ')}.`,
+        `Unsupported model "${model}". Supported models: ${supported}.`,
       );
     }
 
-    return model;
+    return definition;
   }
 
   private resolveTemperature(temperature?: number): number {
@@ -157,139 +119,6 @@ export class WorkflowsService {
     }
 
     return Math.min(MAX_TEMPERATURE, Math.max(MIN_TEMPERATURE, temperature));
-  }
-
-  private extractProviderStatus(error: unknown): number {
-    if (error && typeof error === 'object') {
-      const candidate = (error as { status?: unknown }).status;
-      if (
-        typeof candidate === 'number' &&
-        Number.isInteger(candidate) &&
-        candidate >= 400 &&
-        candidate <= 599
-      ) {
-        return candidate;
-      }
-    }
-
-    return HttpStatus.BAD_GATEWAY;
-  }
-
-  // Provider error text can include internal URLs, model details, or other
-  // upstream internals; clients only get a generic message. 429 keeps its
-  // status so the UI can surface rate limiting.
-  private toSafeExecutionError(error: unknown): {
-    message: string;
-    status: number;
-  } {
-    if (this.extractProviderStatus(error) === HttpStatus.TOO_MANY_REQUESTS) {
-      return {
-        message:
-          'The AI provider rate-limited this request. Please try again shortly.',
-        status: HttpStatus.TOO_MANY_REQUESTS,
-      };
-    }
-
-    return {
-      message: 'Workflow execution failed due to an upstream AI provider error.',
-      status: HttpStatus.BAD_GATEWAY,
-    };
-  }
-
-  private async generateViaGoogle(
-    model: string,
-    prompt: string,
-    temperature: number,
-  ): Promise<string> {
-    const apiKey = process.env.GEMINI_API_KEY as string;
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const generativeModel = genAI.getGenerativeModel(
-      {
-        model,
-        generationConfig: { temperature },
-      },
-      { timeout: PROVIDER_TIMEOUT_MS },
-    );
-    const response = await generativeModel.generateContent(prompt);
-    return response.response.text();
-  }
-
-  private async generateViaOpenAICompatible(
-    providerId: Exclude<ModelProvider, 'google'>,
-    model: string,
-    prompt: string,
-    temperature: number,
-  ): Promise<string> {
-    const provider = OPENAI_COMPAT_PROVIDERS[providerId];
-    const apiKey = process.env[provider.apiKeyEnv] as string;
-
-    const payload: Record<string, unknown> = {
-      model,
-      messages: [{ role: 'user', content: prompt }],
-    };
-    if (!NO_TEMPERATURE_MODELS.has(model)) {
-      payload.temperature = temperature;
-    }
-    if (providerId === 'groq' && GROQ_HIDDEN_REASONING_MODELS.has(model)) {
-      payload.reasoning_format = 'hidden';
-    }
-
-    const res = await fetch(provider.baseUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      let message = `${provider.label} request failed with status ${res.status}.`;
-      try {
-        const body = (await res.json()) as {
-          error?: {
-            message?: string;
-            metadata?: { provider_name?: string; raw?: unknown };
-          };
-        };
-        if (body?.error?.message) {
-          message = body.error.message;
-        }
-        const meta = body?.error?.metadata;
-        if (meta) {
-          const raw =
-            typeof meta.raw === 'string'
-              ? meta.raw
-              : meta.raw
-                ? JSON.stringify(meta.raw)
-                : '';
-          const extra = [meta.provider_name, raw]
-            .filter(Boolean)
-            .join(': ')
-            .slice(0, 200);
-          if (extra) {
-            message = `${message} (${extra})`;
-          }
-        }
-      } catch {
-        // keep the status-based fallback message
-      }
-      const error = new Error(message) as Error & { status?: number };
-      error.status = res.status;
-      throw error;
-    }
-
-    const data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    const text = data?.choices?.[0]?.message?.content;
-
-    if (typeof text !== 'string' || !text.trim()) {
-      throw new Error(`${provider.label} returned an empty response.`);
-    }
-
-    return text;
   }
 
   async createWorkflow(dto: CreateWorkflowDto) {
@@ -339,7 +168,11 @@ export class WorkflowsService {
       throw new NotFoundException(`Workflow ${workflowId} not found.`);
     }
 
-    const data: { name?: string; description?: string; promptTemplate?: string } = {};
+    const data: {
+      name?: string;
+      description?: string;
+      promptTemplate?: string;
+    } = {};
 
     if (dto.name !== undefined) {
       const trimmed = dto.name.trim();
@@ -398,6 +231,43 @@ export class WorkflowsService {
     });
   }
 
+  // Grouped by the model the user asked for, so a model that keeps needing a
+  // fallback shows up as unreliable instead of hiding behind its substitute.
+  // Latency and token figures only count runs the requested model served.
+  async getWorkflowStats(workflowId: string): Promise<ModelStats[]> {
+    await this.getWorkflowById(workflowId);
+
+    const rows = await this.prisma.$queryRaw<Record<string, unknown>[]>`
+      SELECT
+        COALESCE("fallbackFrom", "model") AS "model",
+        COUNT(*) AS "runs",
+        COUNT(*) FILTER (WHERE "status" = 'success' AND "fallbackFrom" IS NULL) AS "successes",
+        COUNT(*) FILTER (WHERE "fallbackFrom" IS NOT NULL) AS "fallbacks",
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY "latencyMs")
+          FILTER (WHERE "status" = 'success' AND "fallbackFrom" IS NULL) AS "p50LatencyMs",
+        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY "latencyMs")
+          FILTER (WHERE "status" = 'success' AND "fallbackFrom" IS NULL) AS "p95LatencyMs",
+        AVG("completionTokens")
+          FILTER (WHERE "status" = 'success' AND "fallbackFrom" IS NULL) AS "avgCompletionTokens"
+      FROM "WorkflowRun"
+      WHERE "workflowId" = ${workflowId}::uuid
+        AND "model" IS NOT NULL
+        AND "status" <> 'pending'
+      GROUP BY 1
+      ORDER BY 2 DESC, 1
+    `;
+
+    return rows.map((row) => ({
+      model: String(row.model),
+      runs: toNumber(row.runs) ?? 0,
+      successes: toNumber(row.successes) ?? 0,
+      fallbacks: toNumber(row.fallbacks) ?? 0,
+      p50LatencyMs: toNumber(row.p50LatencyMs),
+      p95LatencyMs: toNumber(row.p95LatencyMs),
+      avgCompletionTokens: toNumber(row.avgCompletionTokens),
+    }));
+  }
+
   async executeWorkflow(
     workflowId: string,
     inputData: unknown,
@@ -407,13 +277,8 @@ export class WorkflowsService {
       throw new BadRequestException('inputData is required.');
     }
 
-    const modelName = this.resolveModel(options.model);
+    const requested = this.resolveModel(options.model);
     const temperature = this.resolveTemperature(options.temperature);
-    // Models that ignore a custom temperature are recorded with null so the
-    // run history reflects what was actually applied.
-    const appliedTemperature = NO_TEMPERATURE_MODELS.has(modelName)
-      ? null
-      : temperature;
 
     const workflow = await this.prisma.workflow.findUnique({
       where: { id: workflowId },
@@ -423,51 +288,38 @@ export class WorkflowsService {
       throw new NotFoundException(`Workflow ${workflowId} not found.`);
     }
 
-    const provider = MODEL_REGISTRY[modelName];
-    if (provider === 'google') {
-      if (!process.env.GEMINI_API_KEY) {
-        throw new InternalServerErrorException(
-          'Missing GEMINI_API_KEY environment variable.',
-        );
-      }
-    } else {
-      const { apiKeyEnv } = OPENAI_COMPAT_PROVIDERS[provider];
-      if (!process.env[apiKeyEnv]) {
-        throw new InternalServerErrorException(
-          `Missing ${apiKeyEnv} environment variable.`,
-        );
-      }
-    }
-
     const prompt = applyTemplate(workflow.promptTemplate, inputData);
 
+    // Written before the model call so a crash or timeout still leaves an
+    // auditable record.
     const workflowRun = await this.prisma.workflowRun.create({
       data: {
         workflowId: workflow.id,
-        inputData: inputData as any,
+        inputData,
         outputResult: '',
         status: 'pending',
-        model: modelName,
-        temperature: appliedTemperature,
+        model: requested.id,
+        temperature: requested.fixedTemperature ? null : temperature,
       },
     });
 
     try {
-      const outputResult =
-        provider === 'google'
-          ? await this.generateViaGoogle(modelName, prompt, temperature)
-          : await this.generateViaOpenAICompatible(
-              provider,
-              modelName,
-              prompt,
-              temperature,
-            );
+      const result = await this.llm.generate(requested, prompt, temperature, {
+        allowFallback: options.allowFallback,
+      });
 
       const updatedRun = await this.prisma.workflowRun.update({
         where: { id: workflowRun.id },
         data: {
-          outputResult,
+          outputResult: result.text,
           status: 'success',
+          model: result.model,
+          fallbackFrom: result.fallbackFrom,
+          temperature: result.temperature,
+          attempts: result.attempts,
+          latencyMs: result.latencyMs,
+          promptTokens: result.promptTokens,
+          completionTokens: result.completionTokens,
         },
       });
 
@@ -476,16 +328,24 @@ export class WorkflowsService {
         runId: updatedRun.id,
         status: updatedRun.status,
         outputResult: updatedRun.outputResult,
-        model: modelName,
-        temperature: appliedTemperature,
+        model: result.model,
+        fallbackFrom: result.fallbackFrom,
+        temperature: result.temperature,
+        attempts: result.attempts,
+        latencyMs: result.latencyMs,
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
       };
-    } catch (error) {
+    } catch (error: unknown) {
+      const failure = error instanceof GenerationError ? error : null;
+      const cause = failure ? failure.primaryError : error;
+
       this.logger.error(
-        `Workflow ${workflowId} run ${workflowRun.id} failed: ${this.extractProviderErrorMessage(error)}`,
-        error instanceof Error ? error.stack : undefined,
+        `Workflow ${workflowId} run ${workflowRun.id} failed: ${describeError(cause)}`,
+        cause instanceof Error ? cause.stack : undefined,
       );
 
-      const safe = this.toSafeExecutionError(error);
+      const safe = toSafeExecutionError(cause);
 
       // Store the sanitized message too: run history is readable by any
       // client via GET /workflows/:id/runs.
@@ -494,6 +354,8 @@ export class WorkflowsService {
         data: {
           outputResult: safe.message,
           status: 'failed',
+          attempts: failure?.attempts ?? null,
+          latencyMs: failure?.latencyMs ?? null,
         },
       });
 

@@ -29,9 +29,18 @@ model WorkflowRun {
   inputData    Json
   outputResult String
   status       WorkflowRunStatus @default(pending)
-  model        String?
-  temperature  Float?
-  createdAt    DateTime          @default(now())
+  // The model that produced the output. When a fallback answered, the model
+  // that was asked for is kept in fallbackFrom.
+  model            String?
+  fallbackFrom     String?
+  temperature      Float?
+  attempts         Int?
+  latencyMs        Int?
+  promptTokens     Int?
+  completionTokens Int?
+  createdAt        DateTime          @default(now())
+
+  @@index([workflowId, createdAt(sort: Desc)])
 }
 
 enum WorkflowRunStatus {
