@@ -75,6 +75,9 @@ const GROQ_HIDDEN_REASONING_MODELS = new Set<string>([
 const SUPPORTED_MODELS = Object.keys(MODEL_REGISTRY);
 
 const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
+// A hung provider would otherwise hold the request open and leave the run
+// pending indefinitely.
+const PROVIDER_TIMEOUT_MS = 60_000;
 const DEFAULT_TEMPERATURE = 1;
 const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
@@ -203,10 +206,13 @@ export class WorkflowsService {
   ): Promise<string> {
     const apiKey = process.env.GEMINI_API_KEY as string;
     const genAI = new GoogleGenerativeAI(apiKey);
-    const generativeModel = genAI.getGenerativeModel({
-      model,
-      generationConfig: { temperature },
-    });
+    const generativeModel = genAI.getGenerativeModel(
+      {
+        model,
+        generationConfig: { temperature },
+      },
+      { timeout: PROVIDER_TIMEOUT_MS },
+    );
     const response = await generativeModel.generateContent(prompt);
     return response.response.text();
   }
@@ -238,6 +244,7 @@ export class WorkflowsService {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     });
 
     if (!res.ok) {

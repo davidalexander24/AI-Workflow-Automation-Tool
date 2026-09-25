@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
 } from '@nestjs/common';
@@ -28,25 +29,25 @@ export class WorkflowsController {
   }
 
   @Get(':id')
-  getWorkflowById(@Param('id') workflowId: string) {
+  getWorkflowById(@Param('id', ParseUUIDPipe) workflowId: string) {
     return this.workflowsService.getWorkflowById(workflowId);
   }
 
   @Patch(':id')
   updateWorkflow(
-    @Param('id') workflowId: string,
+    @Param('id', ParseUUIDPipe) workflowId: string,
     @Body() body: UpdateWorkflowDto,
   ) {
     return this.workflowsService.updateWorkflow(workflowId, body);
   }
 
   @Delete(':id')
-  deleteWorkflow(@Param('id') workflowId: string) {
+  deleteWorkflow(@Param('id', ParseUUIDPipe) workflowId: string) {
     return this.workflowsService.deleteWorkflow(workflowId);
   }
 
   @Get(':id/runs')
-  getWorkflowRuns(@Param('id') workflowId: string) {
+  getWorkflowRuns(@Param('id', ParseUUIDPipe) workflowId: string) {
     return this.workflowsService.getWorkflowRuns(workflowId);
   }
 
@@ -55,7 +56,7 @@ export class WorkflowsController {
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @Post(':id/execute')
   executeWorkflow(
-    @Param('id') workflowId: string,
+    @Param('id', ParseUUIDPipe) workflowId: string,
     @Body() body: ExecuteWorkflowDto,
   ) {
     return this.workflowsService.executeWorkflow(workflowId, body.inputData, {
