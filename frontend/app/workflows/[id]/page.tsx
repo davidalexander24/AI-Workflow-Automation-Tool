@@ -19,12 +19,13 @@ import {
   MIN_TEMPERATURE,
   ModelInfo,
   ModelStats,
+  StepResult,
   ModelsResponse,
   Workflow,
   WorkflowRun,
   requestJson,
 } from '../../lib/api';
-import { extractVariables, shouldUseSingleInput } from '../../lib/template';
+import { extractWorkflowVariables, shouldUseSingleInput } from '../../lib/template';
 import { CopyButton } from '../../ui/copy-button';
 import { StatusTag } from '../../ui/status-tag';
 
@@ -111,6 +112,40 @@ function formatTokens(prompt?: number | null, completion?: number | null): strin
   return `${prompt ?? '?'} in / ${completion ?? '?'} out tok`;
 }
 
+// One collapsible row per executed step of a multi-step run.
+function StepResultsList({ steps }: { steps: StepResult[] }) {
+  return (
+    <ol className="space-y-2">
+      {steps.map((step, i) => {
+        const details = [
+          shortModelName(step.model),
+          step.fallbackFrom ? `fallback from ${shortModelName(step.fallbackFrom)}` : null,
+          step.latencyMs != null ? formatDuration(step.latencyMs) : null,
+          formatTokens(step.promptTokens, step.completionTokens),
+        ].filter(Boolean);
+        return (
+          <li key={i} className="border border-rule">
+            <details>
+              <summary className="cursor-pointer px-3 py-2 font-mono text-[11px] text-ink-muted hover:text-ink">
+                <span className="text-accent">{i + 1}</span> {step.name}
+                {step.error ? <span className="ml-2 text-fail">[FAIL]</span> : null}
+                <span className="ml-2 text-ink-faint">{details.join(' · ')}</span>
+              </summary>
+              <div className="prose-sans max-h-72 overflow-auto border-t border-rule bg-bg-sunken px-3 py-2 text-sm leading-7 text-ink [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_strong]:font-semibold [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_code]:bg-bg [&_code]:px-1 [&_code]:font-mono [&_code]:text-[12px]">
+                {step.error ? (
+                  <p className="font-mono text-xs text-fail">{step.error}</p>
+                ) : (
+                  <ReactMarkdown>{step.output ?? ''}</ReactMarkdown>
+                )}
+              </div>
+            </details>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 type ResultMeta = {
   model: string;
   fallbackFrom: string | null;
@@ -158,6 +193,7 @@ export default function ExecuteWorkflowPage() {
   const [resultDuration, setResultDuration] = useState<number | null>(null);
   const [completedAt, setCompletedAt] = useState<string | null>(null);
   const [resultMeta, setResultMeta] = useState<ResultMeta | null>(null);
+  const [resultSteps, setResultSteps] = useState<StepResult[] | null>(null);
 
   // history state
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
@@ -170,12 +206,13 @@ export default function ExecuteWorkflowPage() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const variables = useMemo(
-    () => (workflow ? extractVariables(workflow.promptTemplate) : []),
+    () =>
+      workflow ? extractWorkflowVariables(workflow.promptTemplate, workflow.steps) : [],
     [workflow],
   );
   const useSingleInput = useMemo(
-    () => (workflow ? shouldUseSingleInput(workflow.promptTemplate) : true),
-    [workflow],
+    () => shouldUseSingleInput(variables),
+    [variables],
   );
   // A template with no {{variables}} runs as-is; asking for input would only
   // collect text the backend throws away.
@@ -323,6 +360,7 @@ export default function ExecuteWorkflowPage() {
     setResultDuration(null);
     setCompletedAt(null);
     setResultMeta(null);
+    setResultSteps(null);
 
     const startedAt = performance.now();
 
@@ -348,6 +386,7 @@ export default function ExecuteWorkflowPage() {
         promptTokens: response.promptTokens,
         completionTokens: response.completionTokens,
       });
+      setResultSteps(response.steps);
       await loadRuns(false);
     } catch (error) {
       const duration = Math.round(performance.now() - startedAt);
@@ -468,6 +507,9 @@ export default function ExecuteWorkflowPage() {
             <h1 className="font-mono text-xl font-semibold tracking-tight text-ink md:text-2xl">
               {workflow.name}
             </h1>
+            {workflow.locked ? (
+              <span className="font-mono text-[10px] tracking-wide text-accent">[EXAMPLE]</span>
+            ) : null}
           </div>
           <p className="mt-3 font-sans text-sm leading-relaxed text-ink-muted">
             {workflow.description}
@@ -481,6 +523,28 @@ export default function ExecuteWorkflowPage() {
               {variables.length} {variables.length === 1 ? 'var' : 'vars'}
             </span>
           </div>
+          {workflow.steps.length > 0 ? (
+            <ol
+              aria-label="Pipeline steps"
+              className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-2 font-mono text-[11px]"
+            >
+              {[{ name: workflow.name, model: null }, ...workflow.steps].map((step, i) => (
+                <li key={i} className="flex items-center gap-2">
+                  {i > 0 ? (
+                    <span className="text-ink-faint" aria-hidden>
+                      →
+                    </span>
+                  ) : null}
+                  <span className="border border-rule px-2 py-1 text-ink-muted">
+                    <span className="text-accent">{i + 1}</span> {step.name}
+                    {step.model ? (
+                      <span className="text-ink-faint"> · {shortModelName(step.model)}</span>
+                    ) : null}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          ) : null}
         </header>
       </div>
 
@@ -749,6 +813,14 @@ export default function ExecuteWorkflowPage() {
             no output yet. fill the input and press [▶ RUN] or ⌘/Ctrl + Enter.
           </div>
         )}
+        {!isRunning && resultSteps && resultSteps.length > 1 ? (
+          <div className="border-t border-rule px-4 py-3">
+            <p className="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+              {'// steps'} (final output above)
+            </p>
+            <StepResultsList steps={resultSteps} />
+          </div>
+        ) : null}
       </section>
 
       {/* Per-model stats */}
@@ -759,18 +831,19 @@ export default function ExecuteWorkflowPage() {
               {'// model stats'}
             </h2>
             <span className="font-mono text-[10px] text-ink-faint">
-              success = answered by the requested model, no fallback
+              one call per run, or per step in multi-step runs · success = answered by the
+              requested model, no fallback
             </span>
           </div>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full min-w-[34rem] font-mono text-[11px]">
               <caption className="sr-only">
-                Runs, success rate, latency and output length per requested model
+                Model calls, success rate, latency and output length per requested model
               </caption>
               <thead>
                 <tr className="text-left text-ink-faint">
                   <th scope="col" className="py-1.5 pr-3 font-normal">model</th>
-                  <th scope="col" className="py-1.5 pr-3 text-right font-normal">runs</th>
+                  <th scope="col" className="py-1.5 pr-3 text-right font-normal">calls</th>
                   <th scope="col" className="py-1.5 pr-3 text-right font-normal">success</th>
                   <th scope="col" className="py-1.5 pr-3 text-right font-normal">fallbacks</th>
                   <th scope="col" className="py-1.5 pr-3 text-right font-normal">p50</th>
@@ -782,9 +855,9 @@ export default function ExecuteWorkflowPage() {
                 {stats.map((s) => (
                   <tr key={s.model} className="text-ink-muted">
                     <td className="py-1.5 pr-3 text-ink">{shortModelName(s.model)}</td>
-                    <td className="py-1.5 pr-3 text-right">{s.runs}</td>
+                    <td className="py-1.5 pr-3 text-right">{s.calls}</td>
                     <td className="py-1.5 pr-3 text-right">
-                      {Math.round((s.successes / s.runs) * 100)}%
+                      {Math.round((s.successes / s.calls) * 100)}%
                     </td>
                     <td className="py-1.5 pr-3 text-right">{s.fallbacks || '-'}</td>
                     <td className="py-1.5 pr-3 text-right">
@@ -969,6 +1042,14 @@ export default function ExecuteWorkflowPage() {
                         )}
                       </div>
                       </div>
+                      {activeRun.stepResults && activeRun.stepResults.length > 0 ? (
+                        <div className="mt-4">
+                          <p className="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                            {'// steps'}
+                          </p>
+                          <StepResultsList steps={activeRun.stepResults} />
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </li>

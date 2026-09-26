@@ -25,12 +25,38 @@ export function applyVariables(
   });
 }
 
+// {{previous}} and {{step_N}} are filled from earlier steps' outputs, so in a
+// follow-up step they are not inputs the user types.
+export function isStepReference(name: string): boolean {
+  return name === 'previous' || /^step_\d+$/.test(name);
+}
+
 /**
- * Decide whether a template should render a single free-text textarea
+ * Every input variable a workflow run needs: those in the first template plus
+ * those that follow-up steps use, minus step references.
+ */
+export function extractWorkflowVariables(
+  promptTemplate: string,
+  steps: { promptTemplate: string }[] = [],
+): string[] {
+  const ordered = extractVariables(promptTemplate);
+  const seen = new Set(ordered);
+  for (const step of steps) {
+    for (const name of extractVariables(step.promptTemplate)) {
+      if (!isStepReference(name) && !seen.has(name)) {
+        seen.add(name);
+        ordered.push(name);
+      }
+    }
+  }
+  return ordered;
+}
+
+/**
+ * Decide whether a run should render a single free-text textarea
  * (legacy `{{input}}` convention or no variables at all) or a per-variable form.
  */
-export function shouldUseSingleInput(template: string): boolean {
-  const vars = extractVariables(template);
-  if (vars.length === 0) return true;
-  return vars.length === 1 && vars[0] === 'input';
+export function shouldUseSingleInput(variables: string[]): boolean {
+  if (variables.length === 0) return true;
+  return variables.length === 1 && variables[0] === 'input';
 }

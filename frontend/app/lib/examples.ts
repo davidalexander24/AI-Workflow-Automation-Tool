@@ -1,11 +1,43 @@
+import type { WorkflowStep } from './api';
+
 export type WorkflowExample = {
   id: string;
   name: string;
   description: string;
   promptTemplate: string;
+  steps?: WorkflowStep[];
 };
 
 export const workflowExamples: WorkflowExample[] = [
+  {
+    id: 'meeting-to-email',
+    name: 'Meeting Notes to Follow-up Email',
+    description:
+      'Three steps: pull out decisions and owners, draft the follow-up email, then tighten it.',
+    promptTemplate: `Read these meeting notes and list:
+- every decision that was made
+- every action item, with its owner and due date if stated
+
+Notes:
+{{notes}}`,
+    steps: [
+      {
+        name: 'Draft the email',
+        promptTemplate: `Write a short follow-up email to {{audience}} based on this summary. Open with the decisions, then list the action items with owners.
+
+Summary:
+{{previous}}`,
+        model: null,
+      },
+      {
+        name: 'Tighten it',
+        promptTemplate: `Edit this email to under 150 words without dropping any action item or owner. Return only the email.
+
+{{previous}}`,
+        model: null,
+      },
+    ],
+  },
   {
     id: 'lead-qualifier',
     name: 'Lead Qualifier',

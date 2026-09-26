@@ -57,12 +57,36 @@ export async function requestJson<T>(
   return (await response.json()) as T;
 }
 
+// A step that runs after the workflow's own promptTemplate. model null means
+// "use the model chosen for the run".
+export type WorkflowStep = {
+  name: string;
+  promptTemplate: string;
+  model: string | null;
+};
+
 export type Workflow = {
   id: string;
   name: string;
   description: string;
   promptTemplate: string;
+  steps: WorkflowStep[];
+  // Curated example: runnable by anyone, not editable or deletable.
+  locked: boolean;
   createdAt: string;
+};
+
+export type StepResult = {
+  name: string;
+  model: string;
+  fallbackFrom: string | null;
+  temperature: number | null;
+  attempts: number | null;
+  latencyMs: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  output: string | null;
+  error: string | null;
 };
 
 export type WorkflowRun = {
@@ -80,6 +104,8 @@ export type WorkflowRun = {
   latencyMs?: number | null;
   promptTokens?: number | null;
   completionTokens?: number | null;
+  // Multi-step runs only; run-level latency, tokens and attempts are totals.
+  stepResults?: StepResult[] | null;
   createdAt: string;
 };
 
@@ -95,6 +121,7 @@ export type ExecuteWorkflowResponse = {
   latencyMs: number;
   promptTokens: number | null;
   completionTokens: number | null;
+  steps: StepResult[] | null;
 };
 
 export type ModelInfo = {
@@ -110,14 +137,21 @@ export type ModelsResponse = {
   models: ModelInfo[];
 };
 
+// One row per requested model; every step of a multi-step run is one call.
 export type ModelStats = {
   model: string;
-  runs: number;
+  calls: number;
   successes: number;
   fallbacks: number;
   p50LatencyMs: number | null;
   p95LatencyMs: number | null;
   avgCompletionTokens: number | null;
+};
+
+export type AppConfig = {
+  // 0 means visitor-created workflows are never cleaned up.
+  workflowTtlHours: number;
+  maxFollowUpSteps: number;
 };
 
 export const DEFAULT_TEMPERATURE = 1;
@@ -128,6 +162,7 @@ export type CreateWorkflowPayload = {
   name: string;
   description: string;
   promptTemplate: string;
+  steps: WorkflowStep[];
 };
 
 export type UpdateWorkflowPayload = Partial<CreateWorkflowPayload>;

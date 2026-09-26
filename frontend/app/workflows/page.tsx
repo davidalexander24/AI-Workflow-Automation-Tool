@@ -3,20 +3,29 @@
 import Link from 'next/link';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppConfig,
   CreateWorkflowPayload,
+  ModelInfo,
+  ModelsResponse,
   UpdateWorkflowPayload,
   Workflow,
+  WorkflowStep,
   requestJson,
 } from '../lib/api';
 import { workflowExamples } from '../lib/examples';
-import { extractVariables } from '../lib/template';
+import { extractWorkflowVariables } from '../lib/template';
 import { useDialogFocus } from '../ui/use-dialog-focus';
 
 const initialFormState: CreateWorkflowPayload = {
   name: '',
   description: '',
   promptTemplate: '',
+  steps: [],
 };
+
+const DEFAULT_MAX_STEPS = 4;
+
+const emptyStep: WorkflowStep = { name: '', promptTemplate: '', model: null };
 
 type DialogMode =
   | { kind: 'create' }
@@ -55,6 +64,9 @@ export default function WorkflowsPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const maxSteps = config?.maxFollowUpSteps ?? DEFAULT_MAX_STEPS;
 
   const formDialogRef = useRef<HTMLDivElement | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement | null>(null);
@@ -73,8 +85,8 @@ export default function WorkflowsPage() {
   }, [workflows, search]);
 
   const detectedVars = useMemo(
-    () => extractVariables(form.promptTemplate),
-    [form.promptTemplate],
+    () => extractWorkflowVariables(form.promptTemplate, form.steps),
+    [form.promptTemplate, form.steps],
   );
 
   async function loadWorkflows(showRefreshSpinner = false): Promise<void> {
@@ -103,6 +115,13 @@ export default function WorkflowsPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard mount-fetch pattern
     void loadWorkflows();
+    // Both only refine the UI (cleanup notice, step model picker), so a
+    // failure here is not worth an error banner.
+    requestJson<AppConfig>('/config').then(setConfig, () => undefined);
+    requestJson<ModelsResponse>('/models').then(
+      (response) => setModels(response.models),
+      () => undefined,
+    );
   }, []);
 
   useEffect(() => {
@@ -128,9 +147,55 @@ export default function WorkflowsPage() {
       name: workflow.name,
       description: workflow.description,
       promptTemplate: workflow.promptTemplate,
+      steps: workflow.steps ?? [],
     });
     setSubmitError(null);
     setDialog({ kind: 'edit', workflow });
+  }
+
+  // Locked examples cannot be edited, so "duplicate" is how a visitor makes
+  // a version of one they can change.
+  function openDuplicate(workflow: Workflow) {
+    setForm({
+      name: `${workflow.name} (copy)`.slice(0, 200),
+      description: workflow.description,
+      promptTemplate: workflow.promptTemplate,
+      steps: workflow.steps ?? [],
+    });
+    setSubmitError(null);
+    setDialog({ kind: 'create' });
+  }
+
+  function updateStep(index: number, patch: Partial<WorkflowStep>) {
+    setForm((current) => ({
+      ...current,
+      steps: current.steps.map((step, i) => (i === index ? { ...step, ...patch } : step)),
+    }));
+  }
+
+  function moveStep(index: number, offset: -1 | 1) {
+    setForm((current) => {
+      const target = index + offset;
+      if (target < 0 || target >= current.steps.length) return current;
+      const steps = [...current.steps];
+      [steps[index], steps[target]] = [steps[target], steps[index]];
+      return { ...current, steps };
+    });
+  }
+
+  function removeStep(index: number) {
+    setForm((current) => ({
+      ...current,
+      steps: current.steps.filter((_, i) => i !== index),
+    }));
+  }
+
+  function addStep() {
+    setForm((current) =>
+      current.steps.length >= maxSteps
+        ? current
+        : { ...current, steps: [...current.steps, { ...emptyStep }] },
+    );
   }
 
   function openDelete(workflow: Workflow) {
@@ -150,6 +215,7 @@ export default function WorkflowsPage() {
       name: example.name,
       description: example.description,
       promptTemplate: example.promptTemplate,
+      steps: example.steps ?? [],
     });
   }
 
@@ -171,6 +237,7 @@ export default function WorkflowsPage() {
           name: form.name,
           description: form.description,
           promptTemplate: form.promptTemplate,
+          steps: form.steps,
         };
         await requestJson<Workflow>(`/workflows/${dialog.workflow.id}`, {
           method: 'PATCH',
@@ -230,8 +297,17 @@ export default function WorkflowsPage() {
           </button>
         </div>
         <p className="mt-3 font-sans text-xs md:text-sm text-ink-muted">
-          # Define prompt blueprints. Run them with structured input. Inspect every execution.
+          # Define prompt blueprints. Chain them into steps. Run them with structured input. Inspect every execution.
         </p>
+        {config && config.workflowTtlHours > 0 ? (
+          <p className="mt-2 font-mono text-[11px] text-ink-faint">
+            public demo: workflows you create are cleared after{' '}
+            {config.workflowTtlHours % 24 === 0
+              ? `${config.workflowTtlHours / 24} day${config.workflowTtlHours === 24 ? '' : 's'}`
+              : `${config.workflowTtlHours}h`}
+            . [EXAMPLE] workflows stay; duplicate one to change it.
+          </p>
+        ) : null}
       </header>
 
       {/* Stats + search */}
@@ -308,7 +384,8 @@ export default function WorkflowsPage() {
         ) : (
           <ul className="divide-y divide-rule border-y border-rule">
             {filteredWorkflows.map((workflow) => {
-              const vars = extractVariables(workflow.promptTemplate);
+              const vars = extractWorkflowVariables(workflow.promptTemplate, workflow.steps);
+              const stepCount = 1 + (workflow.steps?.length ?? 0);
               return (
                 <li
                   key={workflow.id}
@@ -323,12 +400,23 @@ export default function WorkflowsPage() {
                       >
                         {slugify(workflow.name)}
                       </Link>
+                      {workflow.locked ? (
+                        <span className="font-mono text-[10px] tracking-wide text-accent">
+                          [EXAMPLE]
+                        </span>
+                      ) : null}
                     </div>
                     <p className="mt-2 font-sans text-sm leading-relaxed text-ink-muted">
                       {workflow.description}
                     </p>
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-ink-faint">
                       <span>{formatDate(workflow.createdAt)}</span>
+                      {stepCount > 1 ? (
+                        <>
+                          <span>·</span>
+                          <span className="text-ink-muted">{stepCount} steps</span>
+                        </>
+                      ) : null}
                       <span>·</span>
                       <span>
                         {vars.length} {vars.length === 1 ? 'var' : 'vars'}
@@ -357,20 +445,32 @@ export default function WorkflowsPage() {
                     >
                       [RUN →]
                     </Link>
-                    <button
-                      type="button"
-                      onClick={() => openEdit(workflow)}
-                      className="border border-transparent px-3 py-1.5 tracking-wide text-ink-muted hover:border-gray-500"
-                    >
-                      [EDIT]
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openDelete(workflow)}
-                      className="border border-transparent px-3 py-1.5 tracking-wide text-ink-muted hover:border-fail/60 hover:text-fail"
-                    >
-                      [DEL]
-                    </button>
+                    {workflow.locked ? (
+                      <button
+                        type="button"
+                        onClick={() => openDuplicate(workflow)}
+                        className="border border-transparent px-3 py-1.5 tracking-wide text-ink-muted hover:border-gray-500"
+                      >
+                        [DUPLICATE]
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openEdit(workflow)}
+                          className="border border-transparent px-3 py-1.5 tracking-wide text-ink-muted hover:border-gray-500"
+                        >
+                          [EDIT]
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDelete(workflow)}
+                          className="border border-transparent px-3 py-1.5 tracking-wide text-ink-muted hover:border-fail/60 hover:text-fail"
+                        >
+                          [DEL]
+                        </button>
+                      </>
+                    )}
                   </div>
                 </li>
               );
@@ -488,7 +588,9 @@ export default function WorkflowsPage() {
                   htmlFor="workflow-template"
                   className="flex items-baseline justify-between font-mono text-[10px] uppercase tracking-wider text-ink-faint"
                 >
-                  <span>prompt template</span>
+                  <span>
+                    {form.steps.length > 0 ? 'step 1 · prompt template' : 'prompt template'}
+                  </span>
                   <span>
                     use{' '}
                     <code className="text-ink-muted">{'{{variable}}'}</code> tokens
@@ -507,7 +609,7 @@ export default function WorkflowsPage() {
                   className="mt-1.5 w-full resize-y border border-rule bg-bg px-3 py-2 font-mono text-sm leading-6 text-ink focus:border-accent focus:outline-none"
                 />
                 <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[11px]">
-                  <span className="text-ink-faint">detected:</span>
+                  <span className="text-ink-faint">inputs:</span>
                   {detectedVars.length === 0 ? (
                     <span className="text-ink-faint">- none -</span>
                   ) : (
@@ -521,6 +623,117 @@ export default function WorkflowsPage() {
                     ))
                   )}
                 </div>
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-baseline justify-between gap-2 font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                  <span>then run these steps (optional)</span>
+                  <span className="normal-case tracking-normal">
+                    <code className="text-ink-muted">{'{{previous}}'}</code> = prior step&apos;s output,{' '}
+                    <code className="text-ink-muted">{'{{step_1}}'}</code> = any earlier step
+                  </span>
+                </div>
+
+                {form.steps.map((step, i) => {
+                  const stepNumber = i + 2;
+                  const pinnedMissing =
+                    step.model !== null && !models.some((m) => m.id === step.model);
+                  return (
+                    <fieldset key={i} className="mt-3 border border-rule px-3 pb-3 pt-1">
+                      <legend className="px-1 font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                        step {stepNumber}
+                      </legend>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <label htmlFor={`step-${i}-name`} className="sr-only">
+                          Step {stepNumber} name
+                        </label>
+                        <input
+                          id={`step-${i}-name`}
+                          required
+                          maxLength={60}
+                          value={step.name}
+                          onChange={(e) => updateStep(i, { name: e.target.value })}
+                          placeholder="Draft the email"
+                          className="flex-1 border border-rule bg-bg px-3 py-1.5 font-sans text-sm text-ink focus:border-accent focus:outline-none"
+                        />
+                        <label htmlFor={`step-${i}-model`} className="sr-only">
+                          Step {stepNumber} model
+                        </label>
+                        <select
+                          id={`step-${i}-model`}
+                          value={step.model ?? ''}
+                          onChange={(e) => updateStep(i, { model: e.target.value || null })}
+                          className="border border-rule bg-bg px-2 py-1.5 font-mono text-[12px] text-ink focus:border-accent focus:outline-none"
+                        >
+                          <option value="">model: same as run</option>
+                          {pinnedMissing ? (
+                            <option value={step.model ?? ''}>{step.model} (unavailable)</option>
+                          ) : null}
+                          {models.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.maker} · {m.label}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex items-center gap-1 font-mono text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => moveStep(i, -1)}
+                            disabled={i === 0}
+                            aria-label={`Move step ${stepNumber} up`}
+                            className="px-1.5 py-1 text-ink-muted hover:text-ink disabled:opacity-30"
+                          >
+                            [↑]
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveStep(i, 1)}
+                            disabled={i === form.steps.length - 1}
+                            aria-label={`Move step ${stepNumber} down`}
+                            className="px-1.5 py-1 text-ink-muted hover:text-ink disabled:opacity-30"
+                          >
+                            [↓]
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeStep(i)}
+                            aria-label={`Remove step ${stepNumber}`}
+                            className="px-1.5 py-1 text-ink-muted hover:text-fail"
+                          >
+                            [×]
+                          </button>
+                        </div>
+                      </div>
+                      <label htmlFor={`step-${i}-template`} className="sr-only">
+                        Step {stepNumber} prompt template
+                      </label>
+                      <textarea
+                        id={`step-${i}-template`}
+                        required
+                        maxLength={20000}
+                        rows={4}
+                        value={step.promptTemplate}
+                        onChange={(e) => updateStep(i, { promptTemplate: e.target.value })}
+                        placeholder="Write a follow-up email to {{audience}} from: {{previous}}"
+                        className="mt-2 w-full resize-y border border-rule bg-bg px-3 py-2 font-mono text-sm leading-6 text-ink focus:border-accent focus:outline-none"
+                      />
+                    </fieldset>
+                  );
+                })}
+
+                {form.steps.length < maxSteps ? (
+                  <button
+                    type="button"
+                    onClick={addStep}
+                    className="mt-3 border border-dashed border-rule px-3 py-1.5 font-mono text-[11px] tracking-wide text-ink-muted hover:border-accent hover:text-accent"
+                  >
+                    [+ add step]
+                  </button>
+                ) : (
+                  <p className="mt-3 font-mono text-[11px] text-ink-faint">
+                    up to {maxSteps} follow-up steps.
+                  </p>
+                )}
               </div>
 
               {submitError ? (
