@@ -17,7 +17,14 @@ model Workflow {
   id             String        @id @default(uuid()) @db.Uuid
   name           String
   description    String
+  // Step 1 of the workflow.
   promptTemplate String
+  // Follow-up steps run after promptTemplate, in order:
+  // [{ name, promptTemplate, model? }]
+  steps          Json          @default("[]")
+  // Curated examples: readable and runnable by anyone, not editable or
+  // deletable through the API, and exempt from the demo cleanup.
+  locked         Boolean       @default(false)
   createdAt      DateTime      @default(now())
   runs           WorkflowRun[]
 }
@@ -38,6 +45,10 @@ model WorkflowRun {
   latencyMs        Int?
   promptTokens     Int?
   completionTokens Int?
+  // Multi-step runs only: one entry per executed step with its output,
+  // model, latency, and tokens. Run-level latency, tokens and attempts are
+  // totals across steps.
+  stepResults      Json?
   createdAt        DateTime          @default(now())
 
   @@index([workflowId, createdAt(sort: Desc)])

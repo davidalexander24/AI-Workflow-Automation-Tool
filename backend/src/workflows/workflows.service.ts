@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -8,6 +9,7 @@ import {
 } from '@nestjs/common';
 import {
   GenerationError,
+  GenerationResult,
   LlmService,
   describeError,
   statusOf,
@@ -20,13 +22,21 @@ import {
   isProviderConfigured,
 } from '../llm/model-registry';
 import { PrismaService } from '../prisma/prisma.service';
+import { StepDefinition, parseSteps, renderStep } from './chain';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
+import { WorkflowStepDto } from './dto/workflow-step.dto';
 import { applyTemplate } from './template';
 
 const DEFAULT_TEMPERATURE = 1;
 const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
+// Shared by every step of a multi-step run, so a chain cannot hold a request
+// open for minutes.
+const CHAIN_BUDGET_MS = 180_000;
+
+const LOCKED_MESSAGE =
+  'This example workflow is read-only. Duplicate it to make your own version.';
 
 export type ExecuteOptions = {
   model?: string;
@@ -36,12 +46,26 @@ export type ExecuteOptions = {
 
 export type ModelStats = {
   model: string;
-  runs: number;
+  calls: number;
   successes: number;
   fallbacks: number;
   p50LatencyMs: number | null;
   p95LatencyMs: number | null;
   avgCompletionTokens: number | null;
+};
+
+// Stored in WorkflowRun.stepResults, one per executed step.
+export type StepResult = {
+  name: string;
+  model: string;
+  fallbackFrom: string | null;
+  temperature: number | null;
+  attempts: number | null;
+  latencyMs: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  output: string | null;
+  error: string | null;
 };
 
 // Provider error text can include internal URLs, model details, or other
@@ -73,6 +97,26 @@ function toNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? Math.round(parsed) : null;
 }
 
+function sumOrNull(values: (number | null)[]): number | null {
+  const present = values.filter((v): v is number => v !== null);
+  return present.length ? present.reduce((a, b) => a + b, 0) : null;
+}
+
+function toStepResult(name: string, result: GenerationResult): StepResult {
+  return {
+    name,
+    model: result.model,
+    fallbackFrom: result.fallbackFrom,
+    temperature: result.temperature,
+    attempts: result.attempts,
+    latencyMs: result.latencyMs,
+    promptTokens: result.promptTokens,
+    completionTokens: result.completionTokens,
+    output: result.text,
+    error: null,
+  };
+}
+
 @Injectable()
 export class WorkflowsService {
   private readonly logger = new Logger(WorkflowsService.name);
@@ -82,7 +126,7 @@ export class WorkflowsService {
     private readonly llm: LlmService,
   ) {}
 
-  private resolveModel(model?: string): ModelDefinition {
+  private resolveModel(model?: string | null): ModelDefinition {
     if (model === undefined || model === null || model === '') {
       const fallback = defaultModel();
       if (!fallback) {
@@ -121,6 +165,42 @@ export class WorkflowsService {
     return Math.min(MAX_TEMPERATURE, Math.max(MIN_TEMPERATURE, temperature));
   }
 
+  // Trims each step and checks that a pinned model exists at all. Whether its
+  // provider is configured is checked at run time, since keys can change.
+  private normalizeSteps(steps: WorkflowStepDto[]): StepDefinition[] {
+    return steps.map((step, i) => {
+      const name = step.name.trim();
+      const promptTemplate = step.promptTemplate.trim();
+      if (!name || !promptTemplate) {
+        throw new BadRequestException(
+          `Step ${i + 2} needs a name and a prompt template.`,
+        );
+      }
+      const model = step.model?.trim() || null;
+      if (model && !findModel(model)) {
+        throw new BadRequestException(
+          `Step ${i + 2} uses unknown model "${model}".`,
+        );
+      }
+      return { name, promptTemplate, model };
+    });
+  }
+
+  private async findEditable(workflowId: string) {
+    const existing = await this.prisma.workflow.findUnique({
+      where: { id: workflowId },
+    });
+
+    if (!existing) {
+      throw new NotFoundException(`Workflow ${workflowId} not found.`);
+    }
+    if (existing.locked) {
+      throw new ForbiddenException(LOCKED_MESSAGE);
+    }
+
+    return existing;
+  }
+
   async createWorkflow(dto: CreateWorkflowDto) {
     const name = dto.name?.trim();
     const description = dto.description?.trim();
@@ -137,13 +217,14 @@ export class WorkflowsService {
         name,
         description,
         promptTemplate,
+        steps: this.normalizeSteps(dto.steps ?? []),
       },
     });
   }
 
   async getAllWorkflows() {
     return this.prisma.workflow.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ locked: 'desc' }, { createdAt: 'desc' }],
     });
   }
 
@@ -160,18 +241,13 @@ export class WorkflowsService {
   }
 
   async updateWorkflow(workflowId: string, dto: UpdateWorkflowDto) {
-    const existing = await this.prisma.workflow.findUnique({
-      where: { id: workflowId },
-    });
-
-    if (!existing) {
-      throw new NotFoundException(`Workflow ${workflowId} not found.`);
-    }
+    const existing = await this.findEditable(workflowId);
 
     const data: {
       name?: string;
       description?: string;
       promptTemplate?: string;
+      steps?: StepDefinition[];
     } = {};
 
     if (dto.name !== undefined) {
@@ -198,6 +274,10 @@ export class WorkflowsService {
       data.promptTemplate = trimmed;
     }
 
+    if (dto.steps !== undefined) {
+      data.steps = this.normalizeSteps(dto.steps);
+    }
+
     if (Object.keys(data).length === 0) {
       return existing;
     }
@@ -209,13 +289,7 @@ export class WorkflowsService {
   }
 
   async deleteWorkflow(workflowId: string) {
-    const existing = await this.prisma.workflow.findUnique({
-      where: { id: workflowId },
-    });
-
-    if (!existing) {
-      throw new NotFoundException(`Workflow ${workflowId} not found.`);
-    }
+    await this.findEditable(workflowId);
 
     await this.prisma.workflow.delete({ where: { id: workflowId } });
 
@@ -231,16 +305,35 @@ export class WorkflowsService {
     });
   }
 
-  // Grouped by the model the user asked for, so a model that keeps needing a
-  // fallback shows up as unreliable instead of hiding behind its substitute.
-  // Latency and token figures only count runs the requested model served.
+  // One row per model call: a single-step run is one call, and every executed
+  // step of a multi-step run is one more. Grouped by the model that was asked
+  // for, so a model that keeps needing a fallback shows up as unreliable
+  // instead of hiding behind its substitute. Latency and token figures only
+  // count calls the requested model answered itself.
   async getWorkflowStats(workflowId: string): Promise<ModelStats[]> {
     await this.getWorkflowById(workflowId);
 
     const rows = await this.prisma.$queryRaw<Record<string, unknown>[]>`
+      WITH calls AS (
+        SELECT "model", "fallbackFrom", "status"::text AS "status",
+               "latencyMs", "completionTokens"
+        FROM "WorkflowRun"
+        WHERE "workflowId" = ${workflowId}::uuid
+          AND "stepResults" IS NULL
+          AND "model" IS NOT NULL
+          AND "status" <> 'pending'
+        UNION ALL
+        SELECT step->>'model', step->>'fallbackFrom',
+               CASE WHEN step->>'error' IS NULL THEN 'success' ELSE 'failed' END,
+               (step->>'latencyMs')::int, (step->>'completionTokens')::int
+        FROM "WorkflowRun" run
+        CROSS JOIN LATERAL jsonb_array_elements(run."stepResults") AS step
+        WHERE run."workflowId" = ${workflowId}::uuid
+          AND run."stepResults" IS NOT NULL
+      )
       SELECT
         COALESCE("fallbackFrom", "model") AS "model",
-        COUNT(*) AS "runs",
+        COUNT(*) AS "calls",
         COUNT(*) FILTER (WHERE "status" = 'success' AND "fallbackFrom" IS NULL) AS "successes",
         COUNT(*) FILTER (WHERE "fallbackFrom" IS NOT NULL) AS "fallbacks",
         PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY "latencyMs")
@@ -249,17 +342,14 @@ export class WorkflowsService {
           FILTER (WHERE "status" = 'success' AND "fallbackFrom" IS NULL) AS "p95LatencyMs",
         AVG("completionTokens")
           FILTER (WHERE "status" = 'success' AND "fallbackFrom" IS NULL) AS "avgCompletionTokens"
-      FROM "WorkflowRun"
-      WHERE "workflowId" = ${workflowId}::uuid
-        AND "model" IS NOT NULL
-        AND "status" <> 'pending'
+      FROM calls
       GROUP BY 1
       ORDER BY 2 DESC, 1
     `;
 
     return rows.map((row) => ({
       model: String(row.model),
-      runs: toNumber(row.runs) ?? 0,
+      calls: toNumber(row.calls) ?? 0,
       successes: toNumber(row.successes) ?? 0,
       fallbacks: toNumber(row.fallbacks) ?? 0,
       p50LatencyMs: toNumber(row.p50LatencyMs),
@@ -288,7 +378,20 @@ export class WorkflowsService {
       throw new NotFoundException(`Workflow ${workflowId} not found.`);
     }
 
-    const prompt = applyTemplate(workflow.promptTemplate, inputData);
+    const followUps = parseSteps(workflow.steps);
+    // Resolved before anything runs, so an unusable step model fails the
+    // request up front instead of halfway through a chain.
+    const chain = [
+      {
+        name: workflow.name,
+        promptTemplate: workflow.promptTemplate,
+        model: requested,
+      },
+      ...followUps.map((step) => ({
+        ...step,
+        model: step.model ? this.resolveModel(step.model) : requested,
+      })),
+    ];
 
     // Written before the model call so a crash or timeout still leaves an
     // auditable record.
@@ -303,13 +406,123 @@ export class WorkflowsService {
       },
     });
 
+    if (chain.length === 1) {
+      return this.executeSingle(
+        workflowRun.id,
+        workflow.id,
+        requested,
+        applyTemplate(workflow.promptTemplate, inputData),
+        temperature,
+        options.allowFallback,
+      );
+    }
+
+    const deadline = Date.now() + CHAIN_BUDGET_MS;
+    const results: StepResult[] = [];
+    const outputs: string[] = [];
+
+    for (const [index, step] of chain.entries()) {
+      const prompt = renderStep(index, step.promptTemplate, inputData, outputs);
+      try {
+        const result = await this.llm.generate(
+          step.model,
+          prompt,
+          temperature,
+          {
+            allowFallback: options.allowFallback,
+            deadline,
+          },
+        );
+        outputs.push(result.text);
+        results.push(toStepResult(step.name, result));
+      } catch (error: unknown) {
+        const failure = error instanceof GenerationError ? error : null;
+        const cause = failure ? failure.primaryError : error;
+        const safe = toSafeExecutionError(cause);
+        const label = `Step ${index + 1} of ${chain.length} ("${step.name}")`;
+
+        this.logger.error(
+          `Workflow ${workflowId} run ${workflowRun.id}: ${label} failed: ${describeError(cause)}`,
+          cause instanceof Error ? cause.stack : undefined,
+        );
+
+        results.push({
+          name: step.name,
+          model: step.model.id,
+          fallbackFrom: null,
+          temperature: step.model.fixedTemperature ? null : temperature,
+          attempts: failure?.attempts ?? null,
+          latencyMs: failure?.latencyMs ?? null,
+          promptTokens: null,
+          completionTokens: null,
+          output: null,
+          error: safe.message,
+        });
+
+        const message = `${label} failed: ${safe.message}`;
+        await this.prisma.workflowRun.update({
+          where: { id: workflowRun.id },
+          data: {
+            outputResult: message,
+            status: 'failed',
+            stepResults: results,
+            attempts: sumOrNull(results.map((r) => r.attempts)),
+            latencyMs: sumOrNull(results.map((r) => r.latencyMs)),
+          },
+        });
+        throw new HttpException(message, safe.status);
+      }
+    }
+
+    const last = results[results.length - 1];
+    const totals = {
+      attempts: sumOrNull(results.map((r) => r.attempts)),
+      latencyMs: sumOrNull(results.map((r) => r.latencyMs)),
+      promptTokens: sumOrNull(results.map((r) => r.promptTokens)),
+      completionTokens: sumOrNull(results.map((r) => r.completionTokens)),
+    };
+
+    const updatedRun = await this.prisma.workflowRun.update({
+      where: { id: workflowRun.id },
+      data: {
+        outputResult: last.output ?? '',
+        status: 'success',
+        model: last.model,
+        fallbackFrom: last.fallbackFrom,
+        temperature: last.temperature,
+        stepResults: results,
+        ...totals,
+      },
+    });
+
+    return {
+      workflowId: workflow.id,
+      runId: updatedRun.id,
+      status: updatedRun.status,
+      outputResult: updatedRun.outputResult,
+      model: last.model,
+      fallbackFrom: last.fallbackFrom,
+      temperature: last.temperature,
+      ...totals,
+      steps: results,
+    };
+  }
+
+  private async executeSingle(
+    runId: string,
+    workflowId: string,
+    requested: ModelDefinition,
+    prompt: string,
+    temperature: number,
+    allowFallback: boolean | undefined,
+  ) {
     try {
       const result = await this.llm.generate(requested, prompt, temperature, {
-        allowFallback: options.allowFallback,
+        allowFallback,
       });
 
       const updatedRun = await this.prisma.workflowRun.update({
-        where: { id: workflowRun.id },
+        where: { id: runId },
         data: {
           outputResult: result.text,
           status: 'success',
@@ -324,7 +537,7 @@ export class WorkflowsService {
       });
 
       return {
-        workflowId: workflow.id,
+        workflowId,
         runId: updatedRun.id,
         status: updatedRun.status,
         outputResult: updatedRun.outputResult,
@@ -335,13 +548,14 @@ export class WorkflowsService {
         latencyMs: result.latencyMs,
         promptTokens: result.promptTokens,
         completionTokens: result.completionTokens,
+        steps: null,
       };
     } catch (error: unknown) {
       const failure = error instanceof GenerationError ? error : null;
       const cause = failure ? failure.primaryError : error;
 
       this.logger.error(
-        `Workflow ${workflowId} run ${workflowRun.id} failed: ${describeError(cause)}`,
+        `Workflow ${workflowId} run ${runId} failed: ${describeError(cause)}`,
         cause instanceof Error ? cause.stack : undefined,
       );
 
@@ -350,7 +564,7 @@ export class WorkflowsService {
       // Store the sanitized message too: run history is readable by any
       // client via GET /workflows/:id/runs.
       await this.prisma.workflowRun.update({
-        where: { id: workflowRun.id },
+        where: { id: runId },
         data: {
           outputResult: safe.message,
           status: 'failed',

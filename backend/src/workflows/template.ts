@@ -1,7 +1,7 @@
 const VARIABLE_TOKEN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 const INPUT_TOKEN = /\{\{\s*input\s*\}\}/g;
 
-function toText(value: unknown): string {
+export function toText(value: unknown): string {
   if (value === undefined || value === null) {
     return '';
   }
