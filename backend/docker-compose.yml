@@ -1,3 +1,7 @@
+# Pinned so the project (and container) name does not depend on the folder
+# the repo is cloned into.
+name: ai-workflow
+
 services:
   app:
     build: .
@@ -9,7 +13,12 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GROQ_API_KEY: ${GROQ_API_KEY}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # Public demo: unlocked workflows are removed after this many hours.
+      # Set 0 in .env to keep everything.
+      DEMO_WORKFLOW_TTL_HOURS: ${DEMO_WORKFLOW_TTL_HOURS:-72}
       PORT: "3000"
     security_opt:
       - no-new-privileges:true
