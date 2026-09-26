@@ -116,11 +116,30 @@ export class LlmService {
     requested: ModelDefinition,
     prompt: string,
     temperature: number,
-    { allowFallback = true }: { allowFallback?: boolean } = {},
+    {
+      allowFallback = true,
+      deadline: callerDeadline,
+    }: {
+      allowFallback?: boolean;
+      // Absolute time (ms since epoch) the caller needs an answer by, e.g. a
+      // multi-step chain sharing one budget across its steps.
+      deadline?: number;
+    } = {},
   ): Promise<GenerationResult> {
     const startedAt = Date.now();
-    const deadline = startedAt + TOTAL_BUDGET_MS;
+    const deadline = Math.min(
+      startedAt + TOTAL_BUDGET_MS,
+      callerDeadline ?? Infinity,
+    );
     let attempts = 0;
+
+    if (deadline - startedAt < MIN_CALL_BUDGET_MS) {
+      throw new GenerationError(
+        new ProviderError('Not enough time left in the run budget.'),
+        0,
+        0,
+      );
+    }
 
     const attempt = async (model: ModelDefinition): Promise<CallResult> => {
       attempts += 1;
@@ -284,8 +303,11 @@ export class LlmService {
     if (providerId === 'groq' && model.hideReasoning) {
       payload.reasoning_format = 'hidden';
     }
+    if (provider.maxTokens) {
+      payload.max_tokens = provider.maxTokens;
+    }
 
-    const res = await fetch(provider.baseUrl, {
+    const res = await fetch(provider.url(), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -303,11 +325,17 @@ export class LlmService {
     }
 
     const data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
+      choices?: { message?: { content?: string }; finish_reason?: string }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
       error?: { message?: string; code?: number };
     };
     const text = data?.choices?.[0]?.message?.content;
+
+    if (data?.choices?.[0]?.finish_reason === 'length') {
+      this.logger.warn(
+        `${model.id} stopped at its output-token limit; the answer is truncated.`,
+      );
+    }
 
     if (typeof text !== 'string' || !text.trim()) {
       // OpenRouter can answer 200 with an error body when the upstream fails
@@ -339,9 +367,13 @@ export class LlmService {
           message?: string;
           metadata?: { provider_name?: string; raw?: unknown };
         };
+        // Cloudflare's envelope: { success: false, errors: [{ message }] }
+        errors?: { message?: string }[];
       };
       if (body?.error?.message) {
         message = body.error.message;
+      } else if (body?.errors?.[0]?.message) {
+        message = body.errors[0].message;
       }
       const meta = body?.error?.metadata;
       if (meta) {

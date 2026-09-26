@@ -1,4 +1,4 @@
-export type ModelProvider = 'google' | 'groq' | 'openrouter';
+export type ModelProvider = 'google' | 'groq' | 'openrouter' | 'cloudflare';
 
 export interface ModelDefinition {
   id: string;
@@ -14,14 +14,23 @@ export interface ModelDefinition {
 }
 
 export interface OpenAICompatProvider {
-  baseUrl: string;
+  url: () => string;
   label: string;
+  // Sent as max_tokens. Workers AI otherwise stops most models at 256 output
+  // tokens, silently truncating anything longer than a paragraph.
+  maxTokens?: number;
 }
 
 export const PROVIDER_API_KEY_ENV: Record<ModelProvider, string> = {
   google: 'GEMINI_API_KEY',
   groq: 'GROQ_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  cloudflare: 'CLOUDFLARE_API_TOKEN',
+};
+
+// Settings a provider needs besides its API key.
+const PROVIDER_EXTRA_ENV: Partial<Record<ModelProvider, string[]>> = {
+  cloudflare: ['CLOUDFLARE_ACCOUNT_ID'],
 };
 
 export const OPENAI_COMPAT_PROVIDERS: Record<
@@ -29,12 +38,18 @@ export const OPENAI_COMPAT_PROVIDERS: Record<
   OpenAICompatProvider
 > = {
   groq: {
-    baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    url: () => 'https://api.groq.com/openai/v1/chat/completions',
     label: 'Groq',
   },
   openrouter: {
-    baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
+    url: () => 'https://openrouter.ai/api/v1/chat/completions',
     label: 'OpenRouter',
+  },
+  cloudflare: {
+    url: () =>
+      `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID?.trim()}/ai/v1/chat/completions`,
+    label: 'Cloudflare Workers AI',
+    maxTokens: 4096,
   },
 };
 
@@ -116,6 +131,32 @@ export const MODELS: readonly ModelDefinition[] = [
     maker: 'Cohere',
     provider: 'openrouter',
   },
+  // Workers AI free plan. Kimi, DeepSeek V4 and GLM 5.x are listed in its
+  // catalogue but answer 403 on the free plan, so they are not offered.
+  {
+    id: '@cf/meta/llama-4-scout-17b-16e-instruct',
+    label: 'llama-4-scout-17b',
+    maker: 'Meta',
+    provider: 'cloudflare',
+  },
+  {
+    id: '@cf/mistralai/mistral-small-3.1-24b-instruct',
+    label: 'mistral-small-3.1-24b',
+    maker: 'Mistral',
+    provider: 'cloudflare',
+  },
+  {
+    id: '@cf/zai-org/glm-4.7-flash',
+    label: 'glm-4.7-flash',
+    maker: 'Z.ai',
+    provider: 'cloudflare',
+  },
+  {
+    id: '@cf/ibm-granite/granite-4.0-h-micro',
+    label: 'granite-4.0-h-micro',
+    maker: 'IBM',
+    provider: 'cloudflare',
+  },
 ];
 
 export const DEFAULT_MODEL_ID = 'gemini-3.5-flash-lite';
@@ -132,7 +173,11 @@ export function findModel(id: string): ModelDefinition | undefined {
 }
 
 export function isProviderConfigured(provider: ModelProvider): boolean {
-  return Boolean(process.env[PROVIDER_API_KEY_ENV[provider]]?.trim());
+  const required = [
+    PROVIDER_API_KEY_ENV[provider],
+    ...(PROVIDER_EXTRA_ENV[provider] ?? []),
+  ];
+  return required.every((name) => Boolean(process.env[name]?.trim()));
 }
 
 export function availableModels(): ModelDefinition[] {
