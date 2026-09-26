@@ -17,7 +17,7 @@ A lightweight, full-stack internal tool designed to help users define, manage, a
 
 ## Overview
 
-This project was developed to bridge the gap between raw AI capabilities and practical business operations. It allows users to create prompt "blueprints" with named dynamic variables (e.g., `Summarize {{document}} for {{audience}}`), then execute them on-demand against a model of their choice via a clean UI. Each run can target a different model and temperature, and every run records its latency and token usage, making it a lightweight lab for comparing prompt behavior across providers.
+This project was developed to bridge the gap between raw AI capabilities and practical business operations. It allows users to create prompt "blueprints" with named dynamic variables (e.g., `Summarize {{document}} for {{audience}}`), chain them into multi-step pipelines where each step builds on the last, then execute them on-demand against a model of their choice via a clean UI. Each run can target a different model and temperature, and every run records its latency and token usage, making it a lightweight lab for comparing prompt behavior across providers.
 
 The architecture strictly separates the frontend presentation layer from the secure backend execution engine, ensuring API keys and database credentials remain completely isolated from the client.
 
@@ -32,6 +32,7 @@ flowchart LR
   api -->|native SDK| google[Google AI Studio]
   api -->|OpenAI-compatible| groq[Groq]
   api -->|OpenAI-compatible| openrouter[OpenRouter]
+  api -->|OpenAI-compatible| cloudflare[Cloudflare Workers AI]
   actions[GitHub Actions] -->|GET /health every 6h| funnel
 ```
 
@@ -41,6 +42,8 @@ flowchart LR
 2. The template is filled in and sent to the requested model. Transient failures (upstream 5xx or a dropped connection) are retried on the same model with backoff (0.8s, then 2s).
 3. If the model still fails, or fails in a way a retry cannot fix (delisted model, rate limit, timeout), the run falls back once to a model on a *different* provider. Each call is capped at 60s and the whole run at 90s.
 4. The run is updated with the model that actually answered, the model that was requested (when a fallback was used), attempt count, latency, and prompt/completion tokens. Provider error text stays in the server logs; clients only see a sanitized message.
+
+**Multi-step workflows** run the same way, one step after another, sharing a 180s budget. Step 1 is the workflow's own template. Every later step can use `{{previous}}` (the output of the step before it), `{{step_1}}`...`{{step_N}}` (any earlier step), and the run's original input variables, and can be pinned to its own model. Each step's output, model, latency, and tokens are stored with the run; a failure stops the chain and records which step failed.
 
 ## Tech Stack
 
@@ -54,7 +57,7 @@ flowchart LR
 * **Framework:** NestJS
 * **Database:** PostgreSQL (hosted on Supabase)
 * **ORM:** Prisma
-* **AI Integration:** Multi-provider routing. Google Gemini via the Google Gen AI SDK (default), plus OpenAI-compatible providers (Groq, OpenRouter) through one shared code path.
+* **AI Integration:** Multi-provider routing. Google Gemini via the Google Gen AI SDK (default), plus OpenAI-compatible providers (Groq, OpenRouter, Cloudflare Workers AI) through one shared code path.
 * **Deployment:** Self-hosted (Docker + Tailscale Funnel)
 * **Testing & CI:** Jest unit and e2e tests, run with lint, typecheck, and a Docker build on every push via GitHub Actions
 
@@ -69,15 +72,23 @@ Models are grouped in the UI by their maker. The model list is served by the bac
 | **Alibaba** | Qwen3.8 27B | Groq |
 | **NVIDIA** | Nemotron 3 Ultra 550B, Nemotron 3 Super 120B | OpenRouter |
 | **Cohere** | North Mini Code | OpenRouter |
+| **Meta** | Llama 4 Scout 17B | Cloudflare Workers AI |
+| **Mistral** | Mistral Small 3.1 24B | Cloudflare Workers AI |
+| **Z.ai** | GLM-4.7 Flash | Cloudflare Workers AI |
+| **IBM** | Granite 4.0 H Micro | Cloudflare Workers AI |
+
+Every model in the table is on a free tier and was verified with a live completion. Workers AI requests always send `max_tokens`, since most of its models otherwise stop at 256 output tokens.
 
 ## Key Features
 
 * **Dynamic Prompt Templates:** Create reusable prompts with named `{{variable}}` tokens. The run page detects them and renders one labelled input per variable, falls back to a single text/JSON field for the `{{input}}` convention, and runs templates without variables as-is.
+* **Multi-Step Workflows:** Chain up to five steps into a pipeline, e.g. extract action items, draft an email from them, then tighten it. Each step can reference earlier outputs and use its own model, and the run page shows every step's output, model, and latency.
 * **Multi-Provider Model Selection:** Pick any model from a maker-grouped dropdown and adjust temperature per run. The backend routes each request to the correct provider and records what was actually applied. Reasoning models keep their chain-of-thought out of the output.
 * **Retries and Provider Fallback:** Transient provider errors are retried with backoff, and a failing model falls back to one on another provider. The fallback can be switched off per run when comparing models, so a failure shows as a failure.
-* **Per-Model Stats:** Each workflow shows runs, success rate, fallback count, p50/p95 latency, and average output tokens per requested model, computed in PostgreSQL. A model that keeps needing a fallback shows up as unreliable instead of hiding behind its substitute.
+* **Per-Model Stats:** Each workflow shows model calls, success rate, fallback count, p50/p95 latency, and average output tokens per requested model, computed in PostgreSQL (each step of a multi-step run counts as its own call). A model that keeps needing a fallback shows up as unreliable instead of hiding behind its substitute.
 * **Execution History:** Every run is logged with its status, timestamp, model, temperature, latency, attempts, and token usage. Runs can be re-run with their original input and their output copied or downloaded as Markdown.
 * **Workflow Management:** Full create, edit, and delete for workflows, plus client-side search across the library.
+* **Protected Public Demo:** Curated example workflows are locked: anyone can run or duplicate them, but the API refuses edits and deletes. Workflows visitors create are cleaned up after 72 hours in production (`DEMO_WORKFLOW_TTL_HOURS`), so the demo a reviewer opens stays intact.
 * **Secure AI Orchestration:** The backend acts as a secure proxy, isolating every provider API key and normalizing upstream errors. Full provider error detail is logged server-side only; clients and run history get a generic message (provider `429 Too Many Requests` keeps its status so the UI can surface rate limiting).
 * **Hardened Public API:** Per-IP rate limiting (60 requests/min globally, 10 executions/min), request validation with length caps on every field, UUID validation on every `:id` route, an environment-driven CORS allowlist, and helmet security headers. The backend runs as a non-root, capability-dropped container behind Tailscale Funnel, and the frontend ships a Content Security Policy.
 * **Graceful Degradation:** The API boots and stays up even when the database is paused or unreachable. `/health` reports the database separately, data routes answer `503` with a clear message instead of crashing, and the frontend explains when the backend itself is unreachable.
@@ -88,8 +99,9 @@ Models are grouped in the UI by their maker. The model list is served by the bac
 | :--- | :--- | :--- |
 | `GET` | `/health` | Liveness plus a database check (`503` when the database is down) |
 | `GET` | `/models` | Models available on this server, with the default |
-| `GET` / `POST` | `/workflows` | List or create workflows |
-| `GET` / `PATCH` / `DELETE` | `/workflows/:id` | Read, update, or delete a workflow |
+| `GET` | `/config` | Demo cleanup window and the step limit |
+| `GET` / `POST` | `/workflows` | List or create workflows (`steps` optional: `[{ name, promptTemplate, model? }]`) |
+| `GET` / `PATCH` / `DELETE` | `/workflows/:id` | Read, update, or delete a workflow (`403` for locked examples) |
 | `POST` | `/workflows/:id/execute` | Run a workflow: `{ inputData, model?, temperature?, allowFallback? }` |
 | `GET` | `/workflows/:id/runs` | Run history, newest first |
 | `GET` | `/workflows/:id/stats` | Per-model success rate, latency percentiles, and token averages |
@@ -116,6 +128,9 @@ GEMINI_API_KEY="your_gemini_api_key"
 # Optional provider keys (omit any you don't use)
 GROQ_API_KEY="your_groq_api_key"
 OPENROUTER_API_KEY="your_openrouter_api_key"
+# Cloudflare Workers AI needs both: a token with Workers AI permission and the account ID
+CLOUDFLARE_API_TOKEN="your_cloudflare_api_token"
+CLOUDFLARE_ACCOUNT_ID="your_cloudflare_account_id"
 PORT=3000
 ```
 
@@ -127,10 +142,10 @@ npm run start:dev
 ```
 *The backend will be running on `http://localhost:3000`*
 
-Run the tests (no database or provider keys needed; the e2e suite fakes only the database):
+Run the tests (no database or provider keys needed; the e2e suite fakes only the database and the model calls):
 ```bash
-npm test            # unit tests: template filling, retry and fallback policy
-npm run test:e2e    # routing, validation, /health, /models, database-outage handling
+npm test            # unit tests: template filling, step rendering, retry/fallback policy, demo cleanup
+npm run test:e2e    # routing, validation, multi-step execution, locked examples, /health, outage handling
 ```
 
 ### 2. Frontend Setup
@@ -191,5 +206,5 @@ Set `NEXT_PUBLIC_API_URL` to your backend URL (e.g. the Funnel URL above) in the
 ## Database Schema
 
 The database relies on two primary models managed by Prisma:
-1. `Workflow`: Stores the template configuration, name, description, and the raw prompt string.
-2. `WorkflowRun`: Tracks individual executions, linking them to a specific Workflow ID, and storing the dynamic input payload, the resulting AI output, the status, the model that answered (plus the requested one when a fallback was used), temperature, attempt count, latency, and prompt/completion tokens. Runs are indexed by `(workflowId, createdAt DESC)` to serve history and stats.
+1. `Workflow`: Stores the name, description, the first step's prompt template, any follow-up `steps` (JSON), and whether it is a `locked` example.
+2. `WorkflowRun`: Tracks individual executions, linking them to a specific Workflow ID, and storing the dynamic input payload, the resulting AI output, the status, the model that answered (plus the requested one when a fallback was used), temperature, attempt count, latency, and prompt/completion tokens. Multi-step runs also store per-step results in `stepResults` (JSONB), which the stats query unnests with `jsonb_array_elements`. Runs are indexed by `(workflowId, createdAt DESC)` to serve history and stats.
