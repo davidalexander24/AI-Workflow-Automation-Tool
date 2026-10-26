@@ -10,7 +10,8 @@ A lightweight, full-stack internal tool designed to help users define, manage, a
 <br>
 
 <div align="center">
-  <img src="./assets/demo.gif" alt="AI Workflow Automation Demo" width="100%" />
+  <a href="./assets/demo.mp4"><img src="./assets/demo.gif" alt="AI Workflow Automation Demo" width="100%" /></a>
+  <p><em>Running the three-step "Meeting Notes to Follow-up Email" example: fill in the variables, pick a model with fallback, read each step's output, then re-run from history and compare model stats. <a href="./assets/demo.mp4">▶ Watch full video (MP4)</a></em></p>
 </div>
 
 <br>
